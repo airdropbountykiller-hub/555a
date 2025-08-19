@@ -1,5 +1,5 @@
 {
-  "morning_news_sent": true,
+  "morning_news_sent": false,
   "daily_report_sent": false,
   "evening_report_sent": false,
   "weekly_report_sent": false,
@@ -7,5 +7,9 @@
   "quarterly_report_sent": false,
   "semestral_report_sent": false,
   "annual_report_sent": false,
+  "rassegna_stampa_sent": false,
+  "rassegna_stampa_last_run": "",
+  "morning_snapshot_sent": false,
+  "morning_snapshot_last_run": "",
   "last_reset_date": "20250818"
 }
