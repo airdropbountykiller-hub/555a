@@ -53,6 +53,8 @@ GLOBAL_FLAGS = {
     "semestral_report_sent": False,
     "annual_report_sent": False,
     "last_reset_date": datetime.datetime.now().strftime("%Y%m%d")
+,
+    "last_run_keys": {}
 }
 
 def load_daily_flags():
@@ -387,6 +389,27 @@ def get_cache_key(func_name, *args, **kwargs):
 
 # === TELEGRAM CONFIG ===
 TELEGRAM_TOKEN = "8396764345:AAH2aFy5lLAnr4xf-9FU91cWkYIrdG1f7hs"
+# === TELEGRAM ENV OVERRIDE (non-destructive) ===
+try:
+    _TELEGRAM_BOT_TOKEN_ENV = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+    _TELEGRAM_CHAT_ID_ENV   = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+    if _TELEGRAM_BOT_TOKEN_ENV:
+        try:
+            TELEGRAM_TOKEN = _TELEGRAM_BOT_TOKEN_ENV  # common var name
+        except NameError:
+            pass
+        try:
+            TELEGRAM_BOT_TOKEN = _TELEGRAM_BOT_TOKEN_ENV  # alt var name
+        except NameError:
+            pass
+    if _TELEGRAM_CHAT_ID_ENV:
+        try:
+            TELEGRAM_CHAT_ID = _TELEGRAM_CHAT_ID_ENV
+        except NameError:
+            pass
+except Exception as _e:
+    print(f"⚠️ [TELEGRAM] ENV override non applicato: {_e}")
+
 TELEGRAM_CHAT_ID = "@abkllr"
 
 # === FUNZIONI DATA LOADING OTTIMIZZATE PER RENDER LITE ===
@@ -3197,3 +3220,185 @@ except NameError:
 @app.route("/health")
 def health():
     return "OK", 200
+
+
+# === SCHEDULER V2: finestra elastica + debounce ===
+ITALY_TZ = pytz.timezone("Europe/Rome")
+
+def _now_it():
+    return datetime.datetime.now(ITALY_TZ)
+
+def _should_fire(job_name, hhmm, window_sec=300):
+    now = _now_it()
+    today = now.date()
+    sched_time = datetime.datetime.strptime(hhmm, "%H:%M").time()
+    sched = ITALY_TZ.localize(datetime.datetime.combine(today, sched_time))
+    delta = (now - sched).total_seconds()
+    if not (0 <= delta < window_sec):
+        return False
+    # debounce sul minuto
+    try:
+        keymap = GLOBAL_FLAGS.get("last_run_keys", {})
+    except NameError:
+        keymap = {}
+    now_key = now.strftime("%Y%m%d%H%M")
+    if keymap.get(job_name) == now_key:
+        return False
+    # controlla flag giornaliero
+    try:
+        if is_message_sent_today(job_name):
+            return False
+    except Exception:
+        pass
+    # registra
+    try:
+        GLOBAL_FLAGS["last_run_keys"] = keymap
+        GLOBAL_FLAGS["last_run_keys"][job_name] = now_key
+    except Exception:
+        pass
+    return True
+
+def check_and_send_scheduled_messages_v2():
+    # 07:00 Rassegna (se presente)
+    try:
+        if _should_fire("rassegna_stampa", "07:00"):
+            print("📰 [SCHED] Invio rassegna 07:00 (V2)")
+            try:
+                res = generate_rassegna_stampa()
+                set_message_sent_flag("rassegna_stampa")
+                save_daily_flags()
+                print(f"[Rassegna] result: {res}")
+            except Exception as e:
+                print(f"❌ [Rassegna] Errore: {e}")
+    except Exception as _e:
+        print(f"⚠️ [SCHED] rassegna: {_e}")
+
+    # 08:10 Morning
+    try:
+        if _should_fire("morning_news", "08:10"):
+            print("🌅 [SCHED] Invio morning 08:10 (V2)")
+            try:
+                res = generate_morning_news_briefing()
+                set_message_sent_flag("morning_news")
+                save_daily_flags()
+                print(f"[Morning] result: {res}")
+            except Exception as e:
+                print(f"❌ [Morning] Errore: {e}")
+    except Exception as _e:
+        print(f"⚠️ [SCHED] morning: {_e}")
+
+    # 14:10 Lunch
+    try:
+        if _should_fire("daily_report", "14:10"):
+            print("🍝 [SCHED] Invio lunch 14:10 (V2)")
+            try:
+                res = generate_lunch_report()
+                set_message_sent_flag("daily_report")
+                save_daily_flags()
+                print(f"[Lunch] result: {res}")
+            except Exception as e:
+                print(f"❌ [Lunch] Errore: {e}")
+    except Exception as _e:
+        print(f"⚠️ [SCHED] lunch: {_e}")
+
+    # 20:10 Evening
+    try:
+        if _should_fire("evening_report", "20:10"):
+            print("🌙 [SCHED] Invio evening 20:10 (V2)")
+            try:
+                res = generate_evening_report()
+                set_message_sent_flag("evening_report")
+                save_daily_flags()
+                print(f"[Evening] result: {res}")
+            except Exception as e:
+                print(f"❌ [Evening] Errore: {e}")
+    except Exception as _e:
+        print(f"⚠️ [SCHED] evening: {_e}")
+
+# Auto‑override se la vecchia funzione esiste (puoi disattivare con USE_SCHEDULER_V2=0)
+try:
+    _USE_V2 = os.getenv("USE_SCHEDULER_V2", "1").strip() != "0"
+    if _USE_V2:
+        check_and_send_scheduled_messages = check_and_send_scheduled_messages_v2
+        print("⚡ [SCHED] Attivo Scheduler V2 (finestra 5 minuti + debounce)")
+except Exception as _e:
+    print(f"⚠️ [SCHED] Override V2 non applicato: {_e}")
+
+
+# === DEBUG & EMERGENZA (force + flags + time) ===
+try:
+    from flask import jsonify
+    _APP_OK = True
+except Exception:
+    _APP_OK = False
+
+def _debug_now():
+    now = _now_it()
+    hhmm = now.strftime("%H:%M")
+    should = []
+    if hhmm == "07:00": should.append("rassegna_stampa")
+    if hhmm == "08:10": should.append("morning_news")
+    if hhmm == "14:10": should.append("daily_report")
+    if hhmm == "20:10": should.append("evening_report")
+    return now, hhmm, should
+
+try:
+    app  # noqa
+    if _APP_OK:
+        @app.route("/debug/time")
+        def debug_time():
+            now, hhmm, should = _debug_now()
+            return jsonify({"tz":"Europe/Rome","now":now.isoformat(),"hhmm":hhmm,"scheduled_now":should}), 200
+
+        @app.route("/debug/flags")
+        def debug_flags():
+            try:
+                flags = load_daily_flags()
+            except Exception as e:
+                return jsonify({"error": str(e)}), 500
+            return jsonify(flags), 200
+
+        @app.route("/flags/reset/<name>")
+        def reset_flag(name):
+            try:
+                unset_message_sent_flag(name)
+                # also clear *_last_run in memory/file if present
+                try:
+                    f = load_daily_flags()
+                    for k in list(f.keys()):
+                        if k.startswith(name) and k.endswith("_last_run"):
+                            f[k] = ""
+                    save_daily_flags()
+                except Exception:
+                    pass
+                return jsonify({"ok": True, "reset": name}), 200
+            except Exception as e:
+                return jsonify({"ok": False, "error": str(e)}), 500
+
+        @app.route("/force/<which>")
+        def force_send(which):
+            try:
+                if which == "morning":
+                    res = generate_morning_news_briefing()
+                    set_message_sent_flag("morning_news")
+                elif which == "lunch":
+                    res = generate_lunch_report()
+                    set_message_sent_flag("daily_report")
+                elif which == "evening":
+                    res = generate_evening_report()
+                    set_message_sent_flag("evening_report")
+                elif which == "rassegna":
+                    try:
+                        res = generate_rassegna_stampa()
+                        set_message_sent_flag("rassegna_stampa")
+                    except NameError:
+                        return jsonify({"ok": False, "error": "generate_rassegna_stampa non definita"}), 400
+                else:
+                    return jsonify({"ok": False, "error": "unknown task"}), 400
+                save_daily_flags()
+                return jsonify({"ok": True, "which": which, "result": str(res)}), 200
+            except Exception as e:
+                return jsonify({"ok": False, "which": which, "error": str(e)}), 500
+except NameError:
+    # Nessuna app Flask disponibile: skip debug endpoints
+    pass
