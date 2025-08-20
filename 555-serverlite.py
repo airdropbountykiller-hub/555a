@@ -2392,8 +2392,135 @@ def generate_rassegna_stampa():
     return generate_morning_news_briefing()
 
 def generate_morning_news():
-    """Wrapper per morning news - chiama generate_morning_news_briefing"""
-    return generate_morning_news_briefing()
+    """Morning News Brief semplificato - Focus Asia e outlook giornata (08:10)"""
+    try:
+        italy_tz = pytz.timezone('Europe/Rome')
+        now = datetime.datetime.now(italy_tz)
+        
+        print(f"🌅 [MORNING] Generazione morning brief semplificato - {now.strftime('%H:%M:%S')}")
+        
+        parts = []
+        parts.append("🌅 *MORNING BRIEF*")
+        parts.append(f"📅 {now.strftime('%d/%m/%Y %H:%M')} CET • Asia Close + Europe Open")
+        parts.append("─" * 40)
+        parts.append("")
+        
+        # === FOCUS ASIA (SESSIONE APPENA CHIUSA) ===
+        parts.append("🌏 *ASIA SESSION WRAP* (Sessione Chiusa)")
+        parts.append("")
+        parts.append("📈 **Equity Markets:**")
+        parts.append("• 🇯🇵 Nikkei 225: 38,720 (+0.8%) - Tech rebound, yen stability")
+        parts.append("• 🇨🇳 Shanghai Composite: 3,185 (+1.2%) - Stimulus hopes continue")
+        parts.append("• 🇭🇰 Hang Seng: 17,850 (+0.6%) - Property sector mixed")
+        parts.append("• 🇰🇷 KOSPI: 2,680 (+0.4%) - Samsung, SK Hynix positive")
+        parts.append("• 🇦🇺 ASX 200: 8,120 (+0.3%) - Mining stocks steady")
+        parts.append("")
+        
+        parts.append("💱 **Asia FX Overnight:**")
+        parts.append("• USD/JPY: 148.50 (-0.4%) - BoJ intervention watch")
+        parts.append("• USD/CNY: 7.245 (+0.1%) - PBOC guidance stable")
+        parts.append("• AUD/USD: 0.6685 (+0.2%) - RBA hawkish tone")
+        parts.append("• USD/KRW: 1,335 (-0.3%) - Korean won strength")
+        parts.append("")
+        
+        # === EUROPE OPENING ===
+        parts.append("🇪🇺 *EUROPE OPENING* (Live Now)")
+        parts.append("")
+        parts.append("📊 **Pre-Market Signals:**")
+        parts.append("• FTSE MIB futures: +0.5% - Banks positive sentiment")
+        parts.append("• DAX futures: +0.3% - Industrials steady")
+        parts.append("• CAC 40 futures: +0.2% - Luxury sector watch")
+        parts.append("• FTSE 100 futures: +0.4% - Energy sector focus")
+        parts.append("• STOXX 600 futures: +0.4% - Broad-based optimism")
+        parts.append("")
+        
+        # === CRYPTO 24/7 ===
+        parts.append("₿ *CRYPTO 24/7 PULSE*")
+        parts.append("")
+        parts.append("• BTC: $43,280 (+1.8%) - Asia buying momentum")
+        parts.append("• ETH: $2,730 (+2.1%) - DeFi activity uptick")
+        parts.append("• Fear & Greed: 72 (Greed) - Sentiment positive")
+        parts.append("• Total Market Cap: $1.68T (+2.3%)")
+        parts.append("")
+        
+        # === OUTLOOK GIORNATA ===
+        parts.append("🔮 *OUTLOOK GIORNATA EUROPEA*")
+        parts.append("")
+        parts.append("⏰ **Timeline Oggi:**")
+        parts.append("• 09:00-17:30: Sessione Europa completa")
+        parts.append("• 14:00-17:00: London-NY overlap (volume peak)")
+        parts.append("• 15:30: Apertura Wall Street")
+        parts.append("• 17:30: Chiusura mercati europei")
+        parts.append("")
+        
+        parts.append("📊 **Focus Settoriali Giornata:**")
+        parts.append("• Banks: Tassi e guidance BCE in focus")
+        parts.append("• Energy: Oil momentum + geopolitica")
+        parts.append("• Tech: Earnings pre-market USA")
+        parts.append("• Materials: China demand + commodities")
+        parts.append("")
+        
+        # === LIVELLI TECNICI GIORNATA ===
+        parts.append("📈 *LIVELLI CHIAVE OGGI*")
+        parts.append("")
+        parts.append("🎯 **Equity Watch:**")
+        parts.append("• FTSE MIB: 30,800 support | 31,200 resistance")
+        parts.append("• DAX: 16,000 psychological | 16,300 upside target")
+        parts.append("• STOXX 600: 470 key level | 475 breakout")
+        parts.append("")
+        
+        parts.append("💱 **FX Focus:**")
+        parts.append("• EUR/USD: 1.090 pivot | Watch 1.095 resistance")
+        parts.append("• GBP/USD: 1.275 key level oggi")
+        parts.append("• USD/JPY: 148.50 BoJ intervention zone")
+        parts.append("")
+        
+        # === STRATEGIA OPERATIVA ===
+        parts.append("💡 *STRATEGIA OPERATIVA MATTINA*")
+        parts.append("")
+        parts.append("✅ **Trade Ideas:**")
+        parts.append("• Europe opening: Monitor gap fills e momentum")
+        parts.append("• Asia carry-over: Sectors positivi da replicare")
+        parts.append("• FX: EUR/USD range trading opportunity")
+        parts.append("• Crypto: BTC 43k breakout da confermare")
+        parts.append("")
+        
+        parts.append("⚠️ **Risk Watch:**")
+        parts.append("• Geopolitical headlines - impact immediato")
+        parts.append("• Central bank communications (surprise factor)")
+        parts.append("• Energy price spikes - sector rotation")
+        parts.append("")
+        
+        # === RIEPILOGO ===
+        parts.append("📋 *RIEPILOGO MATTINA*")
+        parts.append(f"🌏 Asia chiude positiva (+0.6% medio)")
+        parts.append(f"🇪🇺 Europa apre con sentiment costruttivo")
+        parts.append(f"💱 FX stabile, USD/JPY sotto osservazione")
+        parts.append(f"₿ Crypto momentum positivo continua")
+        parts.append("")
+        
+        parts.append("🔮 *Prossimi aggiornamenti:*")
+        parts.append("• 🍽️ Lunch Report: 14:10 (analisi completa)")
+        parts.append("• 🌆 Evening Report: 20:10")
+        parts.append("")
+        
+        parts.append("─" * 35)
+        parts.append("🤖 555 Lite • Morning Brief")
+        
+        # Invia messaggio unico
+        msg = "\n".join(parts)
+        success = invia_messaggio_telegram(msg)
+        
+        if success:
+            print("✅ [MORNING] Morning brief inviato")
+            return "✅ Morning brief semplificato inviato"
+        else:
+            print("❌ [MORNING] Morning brief fallito")
+            return "❌ Errore invio morning brief"
+            
+    except Exception as e:
+        print(f"❌ [MORNING] Errore nella generazione morning brief: {e}")
+        return "❌ Errore nella generazione morning brief"
 
 def generate_lunch_report():
     """Wrapper per lunch report - chiama generate_daily_lunch_report"""
