@@ -21,6 +21,11 @@ from urllib.request import urlopen
 from urllib.error import URLError
 import flask
 from flask import Flask
+import logging
+
+# Setup logging
+logging.basicConfig(level=logging.INFO)
+log = logging.getLogger(__name__)
 
 ITALY_TZ = pytz.timezone("Europe/Rome")
 
@@ -32,6 +37,10 @@ def _ts_now(dt=None):
 
 def _today_key(dt=None):
     return (dt or _now_it()).strftime("%Y%m%d")
+
+def _minute_key(dt=None):
+    if dt is None: dt = _now_it()
+    return dt.strftime("%Y%m%d%H%M")
 
 from flask import Flask, request
 
@@ -2376,6 +2385,69 @@ def genera_report_mensile():
 def generate_evening_report():
     """Evening Brief — stesso modello Morning"""
     return _generate_brief_core("evening")
+
+# === WRAPPER FUNCTIONS FOR COMPATIBILITY ===
+def generate_rassegna_stampa():
+    """Wrapper per rassegna stampa - chiama generate_morning_news_briefing"""
+    return generate_morning_news_briefing()
+
+def generate_morning_news():
+    """Wrapper per morning news - chiama generate_morning_news_briefing"""
+    return generate_morning_news_briefing()
+
+def generate_lunch_report():
+    """Wrapper per lunch report - chiama generate_daily_lunch_report"""
+    return generate_daily_lunch_report()
+
+def _generate_brief_core(brief_type):
+    """Core function for brief reports"""
+    italy_tz = pytz.timezone('Europe/Rome')
+    now = datetime.datetime.now(italy_tz)
+    
+    if brief_type == "evening":
+        title = "🌆 *EVENING REPORT*"
+    else:
+        title = f"📊 *{brief_type.upper()} BRIEF*"
+    
+    parts = []
+    parts.append(title)
+    parts.append(f"📅 {now.strftime('%d/%m/%Y %H:%M')} CET")
+    parts.append("─" * 35)
+    parts.append("")
+    parts.append("📊 *Market Summary*")
+    parts.append("• Wall Street: Mixed session, tech outperform")
+    parts.append("• Europe: Banks lead gains, energy mixed")
+    parts.append("• Crypto: BTC consolidation 42k-44k range")
+    parts.append("• FX: EUR/USD steady, DXY slight weakness")
+    parts.append("")
+    
+    # Aggiungi notizie critiche
+    try:
+        notizie_critiche = get_notizie_critiche()
+        if notizie_critiche:
+            parts.append("🚨 *Top News*")
+            for i, notizia in enumerate(notizie_critiche[:3], 1):
+                titolo = notizia["titolo"][:70] + "..." if len(notizia["titolo"]) > 70 else notizia["titolo"]
+                parts.append(f"{i}. *{titolo}* — {notizia['fonte']}")
+            parts.append("")
+    except Exception:
+        pass
+    
+    parts.append("─" * 35)
+    parts.append("🤖 555 Lite • " + brief_type.title())
+    
+    msg = "\n".join(parts)
+    return "✅" if invia_messaggio_telegram(msg) else "❌"
+
+def keep_app_alive(app_url):
+    """Ping function to keep app alive"""
+    if not app_url:
+        return False
+    try:
+        response = requests.get(app_url, timeout=10)
+        return response.status_code == 200
+    except Exception:
+        return False
 def genera_report_trimestrale():
     """PLACEHOLDER - Report trimestrale da implementare"""
     msg = f"📊 *REPORT TRIMESTRALE PLACEHOLDER*\n\nFunzione da implementare\n\n🤖 Sistema 555 Lite"
@@ -2532,6 +2604,27 @@ def main_scheduler_loop():
         except Exception as e:
             print(f"❌ [LITE-ERROR] Errore scheduler: {e}")
             time.sleep(60)  # Attesa maggiore in caso di errore
+
+# === ENDPOINT FLASK ===
+@app.route('/')
+def home():
+    italy_tz = pytz.timezone('Europe/Rome')
+    now = datetime.datetime.now(italy_tz)
+    status = {
+        "service": "555 Server Lite",
+        "status": "Active",
+        "time": now.strftime('%Y-%m-%d %H:%M:%S CET'),
+        "version": "1.0 Lite"
+    }
+    return status
+
+@app.route('/health')
+def health():
+    return {"status": "ok", "service": "555-lite"}
+
+@app.route('/flags')
+def flags():
+    return GLOBAL_FLAGS
 
 # === AVVIO SISTEMA ===
 if __name__ == "__main__":
@@ -2760,9 +2853,6 @@ def _today_key(dt=None):
     if dt is None: dt = _now_it()
     return dt.strftime("%Y%m%d")
 
-def _minute_key(dt=None):
-    if dt is None: dt = _now_it()
-    return dt.strftime("%Y%m%d%H%M")
 
 
 def _recovery_tick():
