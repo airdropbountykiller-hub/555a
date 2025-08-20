@@ -256,7 +256,7 @@ except ImportError:
     CORE_INDICATORS = ["MAC", "RSI", "MACD", "Bollinger", "EMA"]
     SPEED_TIMEOUTS = {"http_request_timeout": 8}  # Timeout più aggressivo
 
-# === FUNZIONI GITHUB GIST PER FLAG RECOVERY ===
+# === FUNZIONI GITHUB GIST ESTESE PER FLAG E CONTENUTI PRE-CALCOLATI ===
 def save_flags_to_github_gist():
     """Salva i flag su GitHub Gist per persistenza tra restart container"""
     try:
@@ -294,6 +294,103 @@ def save_flags_to_github_gist():
     except Exception as e:
         print(f"❌ [FLAGS-GIST] Errore generale: {e}")
         return False
+
+def save_precalc_files_to_github_gist(file_type, content, date_key):
+    """Salva file pre-calcolati su GitHub Gist per sincronizzazione"""
+    try:
+        github_token = os.getenv('GITHUB_TOKEN')
+        if not github_token:
+            print(f"⚠️ [PRECALC-GIST] Token GitHub non configurato")
+            return False
+        
+        gist_data = {
+            "description": f"555 Pre-calculated {file_type} Report - {date_key}",
+            "public": False,
+            "files": {
+                f"precalc_{file_type}_{date_key}.txt": {
+                    "content": content
+                }
+            }
+        }
+        
+        response = requests.post(
+            'https://api.github.com/gists',
+            headers={'Authorization': f'token {github_token}'},
+            json=gist_data,
+            timeout=20
+        )
+        
+        if response.status_code == 201:
+            gist_url = response.json().get('html_url', 'N/A')
+            print(f"✅ [PRECALC-GIST] File {file_type} salvato: {gist_url[:50]}...")
+            return True
+        else:
+            print(f"❌ [PRECALC-GIST] Errore salvataggio {file_type}: {response.status_code}")
+            return False
+            
+    except Exception as e:
+        print(f"❌ [PRECALC-GIST] Errore {file_type}: {e}")
+        return False
+
+def load_precalc_file_from_github_gist(file_type, date_key=None):
+    """Carica file pre-calcolato da GitHub Gist"""
+    try:
+        github_token = os.getenv('GITHUB_TOKEN')
+        if not github_token:
+            print(f"⚠️ [PRECALC-GIST] Token GitHub non configurato")
+            return None
+        
+        if date_key is None:
+            date_key = datetime.datetime.now().strftime("%Y%m%d")
+        
+        # Cerca Gist con file pre-calcolato
+        response = requests.get(
+            'https://api.github.com/gists',
+            headers={'Authorization': f'token {github_token}'},
+            timeout=15
+        )
+        
+        if response.status_code != 200:
+            print(f"❌ [PRECALC-GIST] Errore recupero gist: {response.status_code}")
+            return None
+        
+        gists = response.json()
+        
+        # Trova il Gist con il file pre-calcolato più recente
+        for gist in gists:
+            description = gist.get('description', '')
+            if f'555 Pre-calculated {file_type}' in description:
+                files = gist.get('files', {})
+                
+                # Cerca prima per data esatta, poi per più recente
+                target_filename = f"precalc_{file_type}_{date_key}.txt"
+                
+                # Prima prova: data esatta
+                if target_filename in files:
+                    file_info = files[target_filename]
+                    file_url = file_info.get('raw_url')
+                    if file_url:
+                        file_response = requests.get(file_url, timeout=15)
+                        if file_response.status_code == 200:
+                            print(f"✅ [PRECALC-GIST] File {file_type} caricato per {date_key}")
+                            return file_response.text
+                
+                # Seconda prova: file più recente dello stesso tipo
+                for filename, file_info in files.items():
+                    if f'precalc_{file_type}' in filename and '.txt' in filename:
+                        file_url = file_info.get('raw_url')
+                        if file_url:
+                            file_response = requests.get(file_url, timeout=15)
+                            if file_response.status_code == 200:
+                                print(f"✅ [PRECALC-GIST] File {file_type} caricato (più recente)")
+                                return file_response.text
+        
+        print(f"⚠️ [PRECALC-GIST] Nessun file {file_type} trovato")
+        return None
+        
+    except Exception as e:
+        print(f"❌ [PRECALC-GIST] Errore caricamento {file_type}: {e}")
+        return None
 
 def load_flags_from_github_gist():
     """Carica i flag da GitHub Gist (ultimo backup disponibile)"""
@@ -1868,6 +1965,20 @@ def generate_weekly_backtest_summary():
         italy_tz = pytz.timezone('Europe/Rome')
         now = datetime.datetime.now(italy_tz)
         
+        # Prova a caricare il file pre-calcolato settimanale
+        today_key = now.strftime("%Y%m%d")
+        precalc_content = load_precalc_file_from_github_gist("weekly", today_key)
+        
+        # Se esiste un file pre-calcolato, usalo direttamente
+        if precalc_content:
+            print("📄 [WEEKLY] File pre-calcolato trovato, uso contenuti ottimizzati")
+            # Aggiungi header con timestamp aggiornato
+            updated_content = f"📊 === REPORT SETTIMANALE AVANZATO (PRECALC) ===\n{'=' * 80}\n"
+            updated_content += f"📅 File pre-calcolato del {today_key} - Caricato il {now.strftime('%d/%m/%Y alle %H:%M')} (CET)\n"
+            updated_content += "🚀 Sistema 555 Lite - Report pre-ottimizzato dal server principale\n\n"
+            updated_content += precalc_content
+            return updated_content
+        
         # Genera un riassunto avanzato basato sui modelli ML e indicatori
         weekly_lines = []
         weekly_lines.append("📊 === REPORT SETTIMANALE AVANZATO ===\n" + "=" * 80)
@@ -2073,6 +2184,20 @@ def generate_monthly_backtest_summary():
         import random
         italy_tz = pytz.timezone('Europe/Rome')
         now = datetime.datetime.now(italy_tz)
+        
+        # Prova a caricare il file pre-calcolato mensile
+        today_key = now.strftime("%Y%m%d")
+        precalc_content = load_precalc_file_from_github_gist("monthly", today_key)
+        
+        # Se esiste un file pre-calcolato, usalo direttamente
+        if precalc_content:
+            print("📄 [MONTHLY] File pre-calcolato trovato, uso contenuti ottimizzati")
+            # Aggiungi header con timestamp aggiornato
+            updated_content = f"📊 === REPORT MENSILE AVANZATO (PRECALC) ===\n{'=' * 85}\n"
+            updated_content += f"📅 File pre-calcolato del {today_key} - Caricato il {now.strftime('%d/%m/%Y alle %H:%M')} (CET)\n"
+            updated_content += "🚀 Sistema 555 Lite - Report pre-ottimizzato dal server principale\n\n"
+            updated_content += precalc_content
+            return updated_content
         
         # Calcola il periodo mensile
         oggi = datetime.date.today()
