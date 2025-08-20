@@ -1,3 +1,17 @@
+import datetime
+import time
+import requests
+import feedparser
+import threading
+import os
+import pytz
+import pytz
+import gc
+import json
+from urllib.request import urlopen
+from urllib.error import URLError
+import flask
+from flask import Flask
 
 # === 555-LITE SCHEDULE (patched) ===
 SCHEDULE = {
@@ -19,20 +33,6 @@ from flask import Flask, jsonify, request
 Elimina: Dashboard, UI, CSS, PWA, grafici
 Mantiene: Tutto il sistema ML, RSS, scheduling, qualità messaggi identica
 """
-
-import datetime
-import time
-import requests
-import feedparser
-import threading
-import os
-import pytz
-import gc
-import json
-from urllib.request import urlopen
-from urllib.error import URLError
-import flask
-from flask import Flask
 
 # === CONTROLLO MEMORIA E PERFORMANCE ===
 print("🚀 [555-LITE] Avvio sistema ottimizzato RAM...")
