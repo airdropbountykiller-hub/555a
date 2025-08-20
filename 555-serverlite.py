@@ -1,3 +1,17 @@
+
+# === 555-LITE SCHEDULE (patched) ===
+SCHEDULE = {
+    "rassegna": "07:00",
+    "morning":  "08:10",
+    "lunch":    "14:10",
+    "evening":  "20:10",
+}
+RECOVERY_INTERVAL_MINUTES = 10
+RECOVERY_WINDOWS = {"rassegna": 60, "morning": 80, "lunch": 80, "evening": 80}
+ITALY_TZ = pytz.timezone("Europe/Rome")
+LAST_RUN = {}  # per-minute debounce
+
+from flask import Flask, jsonify, request
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
@@ -372,13 +386,22 @@ data_cache = {}
 cache_timestamps = {}
 CACHE_DURATION_MINUTES = 30  # Ridotto da 60 per Render
 
+
 def is_cache_valid(cache_key, duration_minutes=CACHE_DURATION_MINUTES):
     """Check if cache entry is still valid"""
     if cache_key not in cache_timestamps:
         return False
     cache_time = cache_timestamps[cache_key]
-    current_time = datetime.datetime.now()
-    return (current_time - cache_time).total_seconds() < duration_minutes * 60
+    now = _now_it()
+    try:
+        if isinstance(cache_time, (int, float)):
+            return (now.timestamp() - float(cache_time)) < duration_minutes * 60
+        elif isinstance(cache_time, datetime.datetime):
+            return (now - cache_time).total_seconds() < duration_minutes * 60
+        else:
+            return False
+    except Exception:
+        return False
 
 def get_cache_key(func_name, *args, **kwargs):
     """Generate cache key from function name and arguments"""
@@ -689,17 +712,6 @@ FEATURES_ENABLED = {
     "real_time_alerts": True,      # NUOVO - Alert in tempo reale
     "memory_cleanup": True
 }
-
-# === FUNZIONI DI UTILITÀ PER SCHEDULER ===
-def _ts_now(dt=None):
-    """Timestamp per logging scheduler"""
-    if dt is None:
-        dt = datetime.datetime.now()
-    return dt.strftime('%H:%M:%S')
-
-def _ts(dt):
-    """Timestamp semplice"""
-    return dt.strftime('%H:%M:%S')
 
 def is_feature_enabled(feature_name):
     """Controlla se una funzione è abilitata"""
@@ -2336,217 +2348,10 @@ def genera_report_mensile():
     return f"Report mensile avanzato: {'✅' if success else '❌'}"
 
 # === EVENING REPORT ENHANCED ===
+
 def generate_evening_report():
-    """POTENZIATO - Evening Report serale completo con ML, EM e analisi avanzate (20:10)"""
-    print("🌆 [EVENING] Generazione evening report potenziato...")
-    
-    italy_tz = pytz.timezone('Europe/Rome')
-    now = datetime.datetime.now(italy_tz)
-    
-    sezioni = []
-    sezioni.append("🌆 *EVENING REPORT ENHANCED*")
-    sezioni.append(f"📅 {now.strftime('%d/%m/%Y %H:%M')} • Chiusura Completa Mercati")
-    sezioni.append("─" * 40)
-    sezioni.append("")
-    
-    # === ANALISI ML GIORNALIERA COMPLETA ===
-    try:
-        news_analysis = analyze_news_sentiment_and_impact()
-        if news_analysis and news_analysis.get('summary'):
-            sezioni.append("🧠 *ANALISI ML GIORNALIERA COMPLETA*")
-            sezioni.append("")
-            sezioni.append(news_analysis['summary'])
-            sezioni.append("")
-            
-            # Raccomandazioni per domani
-            recommendations = news_analysis.get('recommendations', [])
-            if recommendations:
-                sezioni.append("💡 *STRATEGIE PER DOMANI (ML Based):*")
-                for i, rec in enumerate(recommendations[:4], 1):
-                    sezioni.append(f"{i}. {rec}")
-                sezioni.append("")
-    except Exception as e:
-        print(f"⚠️ [EVENING] Errore analisi ML: {e}")
-    
-    # === RECAP MERCATI COMPLETO CON PERFORMANCE DETTAGLIATE ===
-    sezioni.append("📈 *RECAP MERCATI GLOBALI* (Full Day Session)")
-    sezioni.append("")
-    
-    # USA Markets (Chiusura Completa)
-    sezioni.append("🇺🇸 **USA Markets (Final Close):**")
-    sezioni.append("• S&P 500: 4,825 (+0.3%) - Sessione positiva")
-    sezioni.append("• NASDAQ: 15,180 (-0.1%) - Tech mixed signals")
-    sezioni.append("• Dow Jones: 37,840 (+0.5%) - Industriali leader")
-    sezioni.append("• Russell 2000: 1,975 (+1.1%) - Small caps strong")
-    sezioni.append("• VIX: 16.2 (-3.5%) - Volatility compression")
-    sezioni.append("• Volume SPY: 85M shares (above avg)")
-    sezioni.append("")
-    
-    # Europa (Sessione Completa Enhanced)
-    sezioni.append("🇪🇺 **Europa (Sessione Completa 09:00-17:30):**")
-    sezioni.append("• FTSE MIB: 30,920 (+1.1%) - Milano outperform")
-    sezioni.append("• DAX: 16,145 (+0.6%) - Germania solida")
-    sezioni.append("• CAC 40: 7,595 (+0.4%) - Francia recovery")
-    sezioni.append("• FTSE 100: 7,735 (+0.8%) - UK energy boost")
-    sezioni.append("• STOXX 600: 472.8 (+0.8%) - Europa green")
-    sezioni.append("• IBEX 35: 10,240 (+0.5%) - Spagna banks")
-    sezioni.append("")
-    
-    # MERCATI EMERGENTI (AGGIUNTO - CHIUSURA COMPLETA)
-    sezioni.append("🌟 **Mercati Emergenti (EM Full Day):**")
-    sezioni.append("• 🇨🇳 Shanghai: 3,195 (+1.5%) - China momentum")
-    sezioni.append("• 🇨🇳 Shenzhen: 2,180 (+2.1%) - Tech rally")
-    sezioni.append("• 🇮🇳 NIFTY 50: 19,920 (+1.2%) - India strong close")
-    sezioni.append("• 🇮🇳 SENSEX: 66,150 (+1.0%) - Mumbai positive")
-    sezioni.append("• 🇧🇷 BOVESPA: 118,850 (+1.9%) - Brazil commodities")
-    sezioni.append("• 🇷🇺 MOEX: 3,230 (-0.4%) - Russia pressione")
-    sezioni.append("• 🇿🇦 JSE: 75,450 (+1.0%) - SA mining boom")
-    sezioni.append("• 🌏 MSCI EM: 1,052 (+1.1%) - EM outperform DM")
-    sezioni.append("")
-    
-    # Crypto Markets Enhanced (Evening Close)
-    sezioni.append("₿ **Crypto Markets (24H Complete):**")
-    sezioni.append("• BTC: $43,320 (+1.6%) - Evening strength")
-    sezioni.append("• ETH: $2,745 (+2.3%) - Alt season confirmed")
-    sezioni.append("• BNB: $318 (+3.8%) - Exchange rally")
-    sezioni.append("• SOL: $69.2 (+4.5%) - Ecosystem growth")
-    sezioni.append("• ADA: $0.52 (+2.8%) - Cardano momentum")
-    sezioni.append("• AVAX: $28.5 (+3.2%) - Layer 1 rotation")
-    sezioni.append("• Total Cap: $1.69T (+2.8%) - Market expansion")
-    sezioni.append("• Fear & Greed: 75 (Extreme Greed)")
-    sezioni.append("")
-    
-    # Forex & Commodities Enhanced
-    sezioni.append("💱 **Forex & Commodities (NY Close):**")
-    sezioni.append("• EUR/USD: 1.0925 (+0.4%) - Euro bullish")
-    sezioni.append("• GBP/USD: 1.2805 (+0.3%) - Pound recovery")
-    sezioni.append("• USD/JPY: 148.20 (-0.6%) - Yen strength")
-    sezioni.append("• USD/CHF: 0.8840 (-0.2%) - Safe haven flows")
-    sezioni.append("• DXY: 102.8 (-0.4%) - Dollar weakness")
-    sezioni.append("• Gold: $2,062 (+0.9%) - Safe haven + hedge")
-    sezioni.append("• Silver: $25.10 (+1.8%) - Industrial demand")
-    sezioni.append("• Oil WTI: $76.20 (+2.3%) - Supply tightness")
-    sezioni.append("• Brent: $80.50 (+2.1%) - Global demand")
-    sezioni.append("• Copper: $8,520 (+1.2%) - China recovery")
-    sezioni.append("")
-    
-    # Top movers del giorno
-    sezioni.append("🚀 *TOP MOVERS GIORNATA*")
-    sezioni.append("")
-    sezioni.append("📈 **Best Performers:**")
-    sezioni.append("• Energy sector: +2.3% - Oil rally impact")
-    sezioni.append("• Banks: +1.8% - Rate expectations")
-    sezioni.append("• Real Estate: +1.5% - Yield play")
-    sezioni.append("")
-    sezioni.append("📉 **Worst Performers:**")
-    sezioni.append("• Tech growth: -0.8% - Rate sensitivity")
-    sezioni.append("• Utilities: -0.6% - Defensive rotation out")
-    sezioni.append("• Consumer discretionary: -0.4%")
-    sezioni.append("")
-    
-    # Notizie serali con aggiornamenti
-    try:
-        notizie_critiche = get_notizie_critiche()
-        if notizie_critiche:
-            sezioni.append("📰 *BREAKING NEWS SERALI*")
-            sezioni.append("")
-            
-            for i, notizia in enumerate(notizie_critiche[:2], 1):
-                titolo_breve = notizia["titolo"][:65] + "..." if len(notizia["titolo"]) > 65 else notizia["titolo"]
-                sezioni.append(f"🔴 **{i}.** *{titolo_breve}*")
-                sezioni.append(f"📂 {notizia['categoria']} • 📰 {notizia['fonte']}")
-                if notizia.get('link'):
-                    sezioni.append(f"🔗 {notizia['link'][:70]}...")
-                sezioni.append("")
-    except Exception as e:
-        print(f"⚠️ [EVENING] Errore nel recupero notizie serali: {e}")
-    
-    # Outlook overnight e Asia
-    sezioni.append("🌏 *OUTLOOK OVERNIGHT & ASIA*")
-    sezioni.append("")
-    sezioni.append("⏰ **Prossime Sessioni:**")
-    sezioni.append("• 23:00 CET: Apertura futures USA")
-    sezioni.append("• 01:00 CET: Apertura Tokyo (Nikkei)")
-    sezioni.append("• 03:30 CET: Apertura Hong Kong (HSI)")
-    sezioni.append("• 04:00 CET: Apertura Shanghai (SSE)")
-    sezioni.append("")
-    sezioni.append("📊 **Watch List Asia:**")
-    sezioni.append("• Yen weakness: USD/JPY levels 150+")
-    sezioni.append("• China PMI data: Manufacturing outlook")
-    sezioni.append("• Tech stocks: TSMC, Samsung guidance")
-    sezioni.append("")
-    
-    # Levels per domani
-    sezioni.append("📋 *LEVELS PER DOMANI*")
-    sezioni.append("")
-    sezioni.append("📈 **Gap Watch:**")
-    sezioni.append("• S&P 500: 4820 support | 4850 resistance")
-    sezioni.append("• NASDAQ: 15100 key level | 15300 target")
-    sezioni.append("• Russell 2000: 1960 breakout level")
-    sezioni.append("")
-    sezioni.append("₿ **Crypto Overnight:**")
-    sezioni.append("• BTC: 43500 resistance | 42500 support")
-    sezioni.append("• ETH: 2750 breakout | 2650 key support")
-    sezioni.append("")
-    
-    # Strategie per domani
-    sezioni.append("💡 *STRATEGIE DOMANI*")
-    sezioni.append("")
-    sezioni.append("🎯 **Trading Plan:**")
-    sezioni.append("• Gap up: Fade strength se >0.5%")
-    sezioni.append("• Gap down: Buy dips se <-0.3%")
-    sezioni.append("• Range day: 4800-4850 SPX trading")
-    sezioni.append("")
-    sezioni.append("🛡️ **Risk Management:**")
-    sezioni.append("• Overnight exposure: Reduce size")
-    sezioni.append("• VIX 17-18: Normal volatility regime")
-    sezioni.append("• Stop loss: 0.5% from entry levels")
-    sezioni.append("")
-    
-    # Preview domani
-    sezioni.append("🔮 *PREVIEW DOMANI*")
-    sezioni.append("")
-    sezioni.append("⚡ **Eventi Chiave:**")
-    sezioni.append("• 08:10 CET: Morning News (6 messaggi)")
-    sezioni.append("• 14:10 CET: Lunch Report")
-    sezioni.append("• 15:30 CET: US Market Open")
-    sezioni.append("• Earnings after hours: Monitor guidance")
-    sezioni.append("")
-    
-    # Footer
-    sezioni.append("─" * 35)
-    sezioni.append(f"🤖 Sistema 555 Lite - {now.strftime('%H:%M')} CET")
-    sezioni.append("🌅 Prossimo update: Morning News (08:10)")
-    # === EM Headlines + EM FX & Commodities ===
-    try:
-        emh = get_emerging_markets_headlines(limit=3)
-        if emh:
-            sezioni.append("🌍 *Mercati Emergenti — Flash*")
-            for i, n in enumerate(emh[:3], 1):
-                titolo = n["titolo"][:90] + "..." if len(n["titolo"])>90 else n["titolo"]
-                sezioni.append(f"{i}. *{titolo}* — {n.get('fonte','EM')}")
-            sezioni.append("")
-    except Exception:
-        pass
-    emfx = get_em_fx_and_commodities()
-    if emfx:
-        sezioni.append("🌍 *EM FX & Commodities*")
-        sezioni.extend(emfx)
-        sezioni.append("")
-
-    
-    msg = "\n".join(sezioni)
-    success = invia_messaggio_telegram(msg)
-    
-    # IMPOSTA FLAG SE INVIO RIUSCITO - FIX RECOVERY
-    if success:
-        set_message_sent_flag("evening_report")
-        print(f"✅ [EVENING] Flag evening_report_sent impostato e salvato su file")
-    
-    return f"Evening report: {'✅' if success else '❌'}"
-
-
-# === FUNZIONI PLACEHOLDER PER REPORT FUTURI ===
+    """Evening Brief — stesso modello Morning"""
+    return _generate_brief_core("evening")
 def genera_report_trimestrale():
     """PLACEHOLDER - Report trimestrale da implementare"""
     msg = f"📊 *REPORT TRIMESTRALE PLACEHOLDER*\n\nFunzione da implementare\n\n🤖 Sistema 555 Lite"
@@ -2571,518 +2376,71 @@ def genera_report_annuale():
         set_message_sent_flag("annual_report")
     return f"Report annuale placeholder: {'✅' if success else '❌'}"
 
-# === SISTEMA SCHEDULING COMPLETO INTEGRATO ===
-def schedule_telegram_reports():
-    """Thread principale per scheduling automatico di tutti i report"""
-    import pytz
-    italy_tz = pytz.timezone('Europe/Rome')
-    
-    print(f"🚀 [SCHEDULER] Sistema scheduling 555 Lite avviato")
-    print(f"⏰ [SCHEDULER] Orari configurati:")
-    print(f"   🌅 07:00 - Rassegna Stampa Mattutina (6 messaggi)")
-    print(f"   🌅 08:10 - Morning News Briefing (6 messaggi)")
-    print(f"   🍽️ 14:10 - Daily Lunch Report Enhanced")
-    print(f"   🌆 20:10 - Evening Report")
-    print(f"   📊 Domenica 19:00 - Weekly Report")
-    print(f"   📊 1° giorno mese 21:00 - Monthly Report")
-    
-    while True:
-        try:
-            now = datetime.datetime.now(italy_tz)
-            print(f"🕐 [SCHEDULER] Orario Italia: {_ts_now(now)} - {now.strftime('%A')}")
-            
-            # === RESET GIORNALIERO A MEZZANOTTE ===
-            if now.hour == 0 and now.minute == 0:
-                reset_daily_flags_if_needed()
-                time.sleep(60)  # Evita esecuzioni multiple
-            
-            # === 07:00 - RASSEGNA STAMPA MATTUTINA (6 MESSAGGI) ===
-            elif now.hour == 7 and now.minute == 0:
-                if not is_message_sent_today("morning_news"):
-                    print(f"📰 [07:00] Rassegna Stampa Mattutina (6 messaggi)...")
-                    try:
-                        result = generate_morning_news_briefing()
-                        print(f"✅ [07:00] {result}")
-                    except Exception as e:
-                        print(f"❌ [07:00] Errore rassegna stampa: {e}")
-                else:
-                    print(f"ℹ️ [07:00] Rassegna stampa già inviata oggi")
-                time.sleep(60)
-            
-            # === 08:10 - MORNING NEWS BRIEFING (ALTERNATIVO) ===
-            elif now.hour == 8 and now.minute == 10:
-                if not is_message_sent_today("morning_news"):
-                    print(f"🌅 [08:10] Morning News Briefing (alternativo)...")
-                    try:
-                        result = generate_morning_news_briefing()
-                        print(f"✅ [08:10] {result}")
-                    except Exception as e:
-                        print(f"❌ [08:10] Errore morning briefing: {e}")
-                else:
-                    print(f"ℹ️ [08:10] Morning news già inviato oggi")
-                time.sleep(60)
-            
-            # === 14:10 - DAILY LUNCH REPORT ENHANCED ===
-            elif now.hour == 14 and now.minute == 10:
-                if not is_message_sent_today("daily_report"):
-                    print(f"🍽️ [14:10] Daily Lunch Report Enhanced - Avvio...")
-                    try:
-                        result = generate_daily_lunch_report()
-                        print(f"✅ [14:10] {result}")
-                    except Exception as e:
-                        print(f"❌ [14:10] Errore daily lunch: {e}")
-                else:
-                    print(f"ℹ️ [14:10] Daily lunch già inviato oggi")
-                time.sleep(60)
-            
-            # === 20:10 - EVENING REPORT ===
-            elif now.hour == 20 and now.minute == 10:
-                if not is_message_sent_today("evening_report"):
-                    print(f"🌆 [20:10] Evening Report - Avvio...")
-                    try:
-                        result = generate_evening_report()
-                        print(f"✅ [20:10] {result}")
-                    except Exception as e:
-                        print(f"❌ [20:10] Errore evening report: {e}")
-                else:
-                    print(f"ℹ️ [20:10] Evening report già inviato oggi")
-                time.sleep(60)
-            
-            # === DOMENICA 19:00 - WEEKLY REPORT ENHANCED ===
-            elif now.weekday() == 6 and now.hour == 19 and now.minute == 0:  # Domenica 19:00
-                if not is_message_sent_today("weekly_report"):
-                    print(f"📊 [DOM-19:00] Weekly Report Enhanced - Avvio...")
-                    try:
-                        result = genera_report_settimanale()
-                        print(f"✅ [DOM-19:00] {result}")
-                    except Exception as e:
-                        print(f"❌ [DOM-19:00] Errore weekly report: {e}")
-                else:
-                    print(f"ℹ️ [DOM-19:00] Weekly report già inviato oggi")
-                time.sleep(60)
-            
-            # === 1° DEL MESE 21:00 - MONTHLY REPORT ===
-            elif now.day == 1 and now.hour == 21 and now.minute == 0:
-                if not is_message_sent_today("monthly_report"):
-                    print(f"📊 [1°-21:00] Monthly Report - Avvio...")
-                    try:
-                        result = genera_report_mensile()
-                        print(f"✅ [1°-21:00] {result}")
-                    except Exception as e:
-                        print(f"❌ [1°-21:00] Errore monthly report: {e}")
-                else:
-                    print(f"ℹ️ [1°-21:00] Monthly report già inviato oggi")
-                time.sleep(60)
-            
-            # === PAUSA STANDARD ===
-            time.sleep(30)  # Controlla ogni 30 secondi
-            
-        except Exception as e:
-            print(f"❌ [SCHEDULER] Errore generale: {e}")
-            time.sleep(60)  # Pausa più lunga in caso di errore
-
-def smart_keep_alive():
-    """Smart keep-alive ottimizzato per 555 Lite"""
-    import pytz
-    italy_tz = pytz.timezone('Europe/Rome')
-    app_url = os.environ.get('RENDER_EXTERNAL_URL', 'http://localhost:8000')
-    
-    print(f"🤖 [KEEP-ALIVE] Sistema keep-alive avviato per: {app_url}")
-    print(f"⏰ [KEEP-ALIVE] Attivo durante eventi programmati (07:00, 08:10, 14:10, 20:10)")
-    
-    def is_active_time():
-        """Verifica se siamo in una finestra di eventi programmati"""
-        current_time = datetime.datetime.now(italy_tz)
-        hour = current_time.hour
-        minute = current_time.minute
-        
-        # Finestre attive: 10 min prima e dopo ogni evento
-        active_windows = [
-            (6, 50, 7, 10),   # 07:00 rassegna stampa
-            (8, 0, 8, 20),    # 08:10 morning news  
-            (14, 0, 14, 20),  # 14:10 lunch report
-            (20, 0, 20, 20),  # 20:10 evening report
-        ]
-        
-        # Domenica sera per weekly
-        if current_time.weekday() == 6:  # Domenica
-            active_windows.append((18, 50, 19, 10))  # 19:00 weekly
-        
-        # Primo del mese per monthly
-        if current_time.day == 1:
-            active_windows.append((20, 50, 21, 10))  # 21:00 monthly
-        
-        for start_h, start_m, end_h, end_m in active_windows:
-            if (hour == start_h and minute >= start_m) or (hour == end_h and minute <= end_m) or (start_h < hour < end_h):
-                return True
-        return False
-    
-    def ping_app():
-        """Ping dell'app per keep-alive"""
-        try:
-            response = urlopen(app_url, timeout=10)
-            return response.getcode() == 200
-        except URLError:
-            return False
-    
-    while True:
-        try:
-            current_time = datetime.datetime.now(italy_tz)
-            
-            if is_active_time():
-                print(f"🟢 [KEEP-ALIVE] Finestra attiva - {_ts(current_time)}")
-                if ping_app():
-                    print(f"✅ [KEEP-ALIVE] Ping riuscito")
-                else:
-                    print(f"❌ [KEEP-ALIVE] Ping fallito")
-                time.sleep(300)  # 5 minuti durante finestre attive
-            else:
-                if current_time.minute % 30 == 0:  # Log ogni 30 minuti quando inattivo
-                    print(f"⚪ [KEEP-ALIVE] Modalità dormiente - {_ts(current_time)}")
-                time.sleep(600)  # 10 minuti quando inattivo
-                
-        except Exception as e:
-            print(f"❌ [KEEP-ALIVE] Errore: {e}")
-            time.sleep(300)
-
-def start_scheduler_threads():
-    """Avvia i thread di scheduling e keep-alive"""
-    # Thread scheduler principale
-    scheduler_thread = threading.Thread(target=schedule_telegram_reports, daemon=True)
-    scheduler_thread.start()
-    print("🚀 [THREADS] Scheduler thread avviato")
-    
-    # Thread keep-alive
-    keep_alive_thread = threading.Thread(target=smart_keep_alive, daemon=True)
-    keep_alive_thread.start()
-    print("⚡ [THREADS] Keep-alive thread avviato")
-    
-    # Thread sync se abilitato
-    if BACKUP_SYSTEM_ENABLED:
-        def sync_system_thread():
-            """Placeholder per sync system"""
-            while True:
-                time.sleep(3600)  # Ogni ora
-        
-        sync_thread = threading.Thread(target=sync_system_thread, daemon=True)
-        sync_thread.start()
-        print("🔄 [THREADS] Sync thread avviato")
-        print("✅ [THREADS] Tutti i thread avviati con successo!")
-    else:
-        print("✅ [THREADS] Scheduler e keep-alive avviati (sync disabilitato)")
-
-def check_thread_status():
-    """Verifica lo stato dei thread ogni 5 minuti"""
-    while True:
-        try:
-            alive_threads = threading.enumerate()
-            print(f"\n🔍 [MONITOR] Thread attivi: {len(alive_threads)}")
-            for t in alive_threads:
-                print(f"  • {t.name}: {'🟢 Running' if t.is_alive() else '🔴 Dead'}")
-            time.sleep(300)  # Controlla ogni 5 minuti
-        except Exception as e:
-            print(f"⚠️ [MONITOR] Errore monitoraggio: {e}")
-            time.sleep(60)
+# === SCHEDULER POTENZIATO ===
 
 def check_and_send_scheduled_messages():
-    """Scheduler potenziato con nuovi report e sistema di recovery"""
-    italy_tz = pytz.timezone('Europe/Rome')
-    now = datetime.datetime.now(italy_tz)
+    """Scheduler per-minuto con debounce + recovery tick"""
+    now = _now_it()
     current_time = now.strftime("%H:%M")
-    current_day = now.strftime("%A")
-    is_month_end = (now + datetime.timedelta(days=1)).day == 1
-    
-    # === SISTEMA RECOVERY MESSAGGI MANCATI ===
-    # RECOVERY GIORNALIERI - 3h30m max (report normali)
-    # Recovery Morning News - 3h30m max (08:10 → 11:40)
-    if (now.hour > 8 or (now.hour == 8 and now.minute > 10)) and \
-        (now.hour < 11 or (now.hour == 11 and now.minute <= 40)) and \
-        not is_message_sent_today("morning_news"):
-        
-        print("🔄 [RECUPERO] Morning News mancate (08:10), recovery attivo fino alle 11:40...")
-        try:
-            result = generate_morning_news_briefing()
-            set_message_sent_flag("morning_news")
-            print(f"✅ [RECUPERO] Morning news recuperate e inviate con successo")
-        except Exception as e:
-            print(f"❌ [RECUPERO] Errore nel recupero morning news: {e}")
-    
-    # Recovery Daily Lunch - 3h30m max (14:10 → 17:40)
-    if (now.hour > 14 or (now.hour == 14 and now.minute > 10)) and \
-        (now.hour < 17 or (now.hour == 17 and now.minute <= 40)) and \
-        not is_message_sent_today("daily_report"):
-        
-        print("🔄 [RECUPERO] Daily Lunch mancato (14:10), recovery attivo fino alle 17:40...")
-        try:
-            result = generate_daily_lunch_report()
-            set_message_sent_flag("daily_report")
-            print(f"✅ [RECUPERO] Daily report recuperato e inviato con successo")
-        except Exception as e:
-            print(f"❌ [RECUPERO] Errore nel recupero daily report: {e}")
-    
-    # Recovery Evening Report - 3h30m max (20:10 → 23:40)
-    if (now.hour > 20 or (now.hour == 20 and now.minute > 10)) and \
-        (now.hour < 23 or (now.hour == 23 and now.minute <= 40)) and \
-        not is_message_sent_today("evening_report"):
-        
-        print("🔄 [RECUPERO] Evening Report mancato (20:10), recovery attivo fino alle 23:40...")
-        try:
-            result = generate_evening_report()
-            set_message_sent_flag("evening_report")
-            print(f"✅ [RECUPERO] Evening report recuperato e inviato con successo")
-        except Exception as e:
-            print(f"❌ [RECUPERO] Errore nel recupero evening report: {e}")
-    
-    # === RECOVERY REPORT IMPORTANTI - UN GIORNO INTERO (24H) ===
-    
-    # Recovery Report Settimanale - 24H (Domenica 18:00 → Lunedì 18:00)
-    is_sunday_after_6pm = (current_day == "Sunday" and now.hour >= 18)
-    is_monday_before_6pm = (current_day == "Monday" and now.hour < 18)
-    if (is_sunday_after_6pm or is_monday_before_6pm) and \
-        not is_message_sent_today("weekly_report"):
-        
-        print("🔄 [RECUPERO-24H] Report Settimanale mancato (Domenica 18:00), recovery attivo per 24 ore...")
-        try:
-            result = genera_report_settimanale()
-            set_message_sent_flag("weekly_report")
-            print(f"✅ [RECUPERO-24H] Report settimanale recuperato e inviato con successo")
-        except Exception as e:
-            print(f"❌ [RECUPERO-24H] Errore nel recupero report settimanale: {e}")
-    
-    # Recovery Report Mensile - 24H (ultimo giorno mese 18:15 → giorno dopo 18:15)
-    yesterday = now - datetime.timedelta(days=1)
-    is_yesterday_month_end = (yesterday + datetime.timedelta(days=1)).day == 1
-    is_today_first_day = now.day == 1
-    is_monthly_recovery_window = (is_month_end and now.hour >= 18) or \
-                                (is_today_first_day and now.hour < 18) or \
-                                (is_yesterday_month_end and is_today_first_day)
-    
-    if is_monthly_recovery_window and not is_message_sent_today("monthly_report"):
-        print("🔄 [RECUPERO-24H] Report Mensile mancato (ultimo giorno mese 18:15), recovery attivo per 24 ore...")
-        try:
-            result = genera_report_mensile()
-            set_message_sent_flag("monthly_report")
-            print(f"✅ [RECUPERO-24H] Report mensile recuperato e inviato con successo")
-        except Exception as e:
-            print(f"❌ [RECUPERO-24H] Errore nel recupero report mensile: {e}")
-    
-    # Recovery Report Trimestrale - 24H (ultimo giorno trimestre 18:30 → giorno dopo 18:30)
-    is_quarter_end = now.month in [3, 6, 9, 12] and is_month_end  # Definisco qui
-    is_quarter_end_recovery = (is_quarter_end and now.hour >= 18) or \
-                             (yesterday.month in [3, 6, 9, 12] and \
-                              (yesterday + datetime.timedelta(days=1)).day == 1 and \
-                              now.hour < 18)
-    
-    if is_quarter_end_recovery and not is_message_sent_today("quarterly_report"):
-        print("🔄 [RECUPERO-24H] Report Trimestrale mancato (ultimo giorno trimestre 18:30), recovery attivo per 24 ore...")
-        try:
-            result = genera_report_trimestrale()
-            set_message_sent_flag("quarterly_report")
-            print(f"✅ [RECUPERO-24H] Report trimestrale recuperato e inviato con successo")
-        except Exception as e:
-            print(f"❌ [RECUPERO-24H] Errore nel recupero report trimestrale: {e}")
-    
-    # Recovery Report Semestrale - 24H (30 giugno o 31 dicembre 18:45 → giorno dopo 18:45)
-    is_semester_end_recovery = ((now.month == 6 and now.day == 30 and now.hour >= 18) or \
-                               (now.month == 12 and now.day == 31 and now.hour >= 18) or \
-                               (yesterday.month == 6 and yesterday.day == 30 and now.hour < 18) or \
-                               (yesterday.month == 12 and yesterday.day == 31 and now.hour < 18))
-    
-    if is_semester_end_recovery and not is_message_sent_today("semestral_report"):
-        print("🔄 [RECUPERO-24H] Report Semestrale mancato (30/06 o 31/12 18:45), recovery attivo per 24 ore...")
-        try:
-            result = genera_report_semestrale()
-            set_message_sent_flag("semestral_report")
-            print(f"✅ [RECUPERO-24H] Report semestrale recuperato e inviato con successo")
-        except Exception as e:
-            print(f"❌ [RECUPERO-24H] Errore nel recupero report semestrale: {e}")
-    
-    # Recovery Report Annuale - 24H (31 dicembre 19:00 → 1 gennaio 19:00)
-    is_year_end_recovery = ((now.month == 12 and now.day == 31 and now.hour >= 19) or \
-                           (yesterday.month == 12 and yesterday.day == 31 and now.hour < 19))
-    
-    if is_year_end_recovery and not is_message_sent_today("annual_report"):
-        print("🔄 [RECUPERO-24H] Report Annuale mancato (31/12 19:00), recovery attivo per 24 ore...")
-        try:
-            result = genera_report_annuale()
-            set_message_sent_flag("annual_report")
-            print(f"✅ [RECUPERO-24H] Report annuale recuperato e inviato con successo")
-        except Exception as e:
-            print(f"❌ [RECUPERO-24H] Errore nel recupero report annuale: {e}")
-    
-    # Report giornalieri esistenti
-    if current_time == "08:10" and not is_message_sent_today("morning_news"):
-        print("🌅 [SCHEDULER] Avvio morning news...")
-        result = generate_morning_news_briefing()
-        set_message_sent_flag("morning_news")
-        print(f"Morning news result: {result}")
-    
-    # NUOVO - Daily report di pranzo (14:10)
-    if current_time == "14:10" and not is_message_sent_today("daily_report"):
-        print("🍽️ [SCHEDULER] Avvio daily report di pranzo...")
-        result = generate_daily_lunch_report()
-        set_message_sent_flag("daily_report")
-        print(f"Daily lunch report result: {result}")
-    
-    # NUOVO - Evening report serale (20:10)
-    if current_time == "20:10" and not is_message_sent_today("evening_report"):
-        print("🌆 [SCHEDULER] Avvio evening report...")
-        result = generate_evening_report()
-        set_message_sent_flag("evening_report")
-        print(f"Evening report result: {result}")
-    
-    # NUOVO - Report settimanale (Domenica 19:00)
-    if current_day == "Sunday" and current_time == "18:00" and not is_message_sent_today("weekly_report"):
-        print("📊 [SCHEDULER] Avvio report settimanale...")
-        result = genera_report_settimanale()
-        print(f"Weekly report result: {result}")
-    
-    # NUOVO - Report mensile (ultimo giorno del mese, 19:30)
-    if is_month_end and current_time == "18:15" and not is_message_sent_today("monthly_report"):
-        print("📊 [SCHEDULER] Avvio report mensile...")
-        result = genera_report_mensile()
-        print(f"Monthly report result: {result}")
+    now_key = _minute_key(now)
 
-    # NUOVO - Report trimestrale (ultimo giorno del trimestre, 18:30)
-    is_quarter_end = now.month in [3, 6, 9, 12] and is_month_end
-    if is_quarter_end and current_time == "18:30" and not is_message_sent_today("quarterly_report"):
-        print("📊 [SCHEDULER] Avvio report trimestrale...")
-        result = genera_report_trimestrale()
-        print(f"Quarterly report result: {result}")
-    
-    # NUOVO - Report semestrale (30 giugno e 31 dicembre, 18:45)
-    is_semester_end = (now.month == 6 and now.day == 30) or (now.month == 12 and now.day == 31)
-    if is_semester_end and current_time == "18:45" and not is_message_sent_today("semestral_report"):
-        print("📊 [SCHEDULER] Avvio report semestrale...")
-        result = genera_report_semestrale()
-        print(f"Semestral report result: {result}")
-    
-    # NUOVO - Report annuale (31 dicembre, 19:00)
-    is_year_end = now.month == 12 and now.day == 31
-    if is_year_end and current_time == "19:00" and not is_message_sent_today("annual_report"):
-        print("📊 [SCHEDULER] Avvio report annuale...")
-        result = genera_report_annuale()
-        print(f"Annual report result: {result}")
-# === MINI WEB SERVER (solo status + pulsante Telegram) ===
-app = Flask(__name__)
+    # RASSEGNA 07:00 (6 pagine)
+    if current_time == SCHEDULE["rassegna"] and not is_message_sent_today("rassegna") and LAST_RUN.get("rassegna") != now_key:
+        print("🗞️ [SCHEDULER] Avvio rassegna stampa (6 pagine)...")
+        # lock immediato
+        try:
+            LAST_RUN["rassegna"] = now_key
+            generate_rassegna_stampa()
+            set_message_sent_flag("rassegna"); 
+            save_daily_flags()
+        except Exception as e:
+            print(f"❌ [SCHEDULER] Errore rassegna: {e}")
 
-@app.route('/')
-def home():
-    """Pagina ultra-minimale con solo pulsante Telegram"""
-    italy_tz = pytz.timezone('Europe/Rome')
-    now = datetime.datetime.now(italy_tz)
-    
-    # Conta messaggi inviati oggi
-    daily_count = sum([
-        GLOBAL_FLAGS["morning_news_sent"],
-        GLOBAL_FLAGS["daily_report_sent"],
-        GLOBAL_FLAGS["evening_report_sent"]
-    ])
-    
-    return f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>555 Bot Lite</title>
-        <meta name="viewport" content="width=device-width, initial-scale=1">
-        <style>
-            body {{
-                font-family: system-ui, -apple-system, sans-serif;
-                text-align: center;
-                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                color: white;
-                margin: 0;
-                min-height: 100vh;
-                display: flex;
-                flex-direction: column;
-                justify-content: center;
-                align-items: center;
-            }}
-            .container {{
-                background: rgba(255,255,255,0.1);
-                padding: 40px;
-                border-radius: 20px;
-                backdrop-filter: blur(10px);
-                box-shadow: 0 8px 32px rgba(0,0,0,0.3);
-            }}
-            h1 {{ font-size: 2.5em; margin-bottom: 20px; }}
-            .status {{ font-size: 1.2em; margin: 20px 0; }}
-            .telegram-btn {{
-                background: #0088cc;
-                color: white;
-                border: none;
-                padding: 20px 40px;
-                font-size: 1.5em;
-                border-radius: 50px;
-                cursor: pointer;
-                text-decoration: none;
-                display: inline-block;
-                transition: all 0.3s ease;
-                box-shadow: 0 4px 15px rgba(0,136,204,0.3);
-            }}
-            .telegram-btn:hover {{
-                background: #006699;
-                transform: translateY(-2px);
-                box-shadow: 0 6px 20px rgba(0,136,204,0.4);
-            }}
-            .stats {{
-                margin-top: 30px;
-                font-size: 0.9em;
-                opacity: 0.8;
-            }}
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <h1>🤖 555 Bot Lite</h1>
-            <div class="status">
-                ✅ Sistema attivo e ottimizzato<br>
-                🚀 RAM dedicata ai messaggi: +60%
-            </div>
-            <a href="https://t.me/abkllr" target="_blank" class="telegram-btn">
-                📱 Canale Telegram
-            </a>
-            <div class="stats">
-                🕐 {now.strftime('%H:%M:%S')}<br>
-                📊 Messaggi oggi: {daily_count}<br>
-                💾 Modalità: Performance Optimized
-            </div>
-        </div>
-    </body>
-    </html>
-    """
+        # cooldown 5 minuti
+        try:
+            time.sleep(300)
+        except Exception:
+            pass
 
-@app.route('/status')
-def status():
-    """API status per monitoring"""
-    italy_tz = pytz.timezone('Europe/Rome')
-    now = datetime.datetime.now(italy_tz)
-    
-    return {
-        "status": "active",
-        "version": "555serverlite",
-        "timestamp": now.isoformat(),
-        "messages_sent_today": sum([
-            GLOBAL_FLAGS["morning_news_sent"],
-            GLOBAL_FLAGS["daily_report_sent"],
-            GLOBAL_FLAGS["evening_report_sent"]
-        ]),
-        "features_enabled": len([k for k, v in FEATURES_ENABLED.items() if v]),
-        "ram_optimization": "60% more RAM available"
-    }
+    # MORNING 08:10
+    if current_time == SCHEDULE["morning"] and not is_message_sent_today("morning_news") and LAST_RUN.get("morning") != now_key:
+        print("🌅 [SCHEDULER] Avvio morning brief...")
+        try:
+            LAST_RUN["morning"] = now_key
+            generate_morning_news()
+            set_message_sent_flag("morning_news"); 
+            save_daily_flags()
+        except Exception as e:
+            print(f"❌ [SCHEDULER] Errore morning: {e}")
 
-# === SISTEMA KEEP-ALIVE PER RENDER ===
-def keep_app_alive(app_url):
-    """Funzione per fare ping all'app e mantenerla attiva su Render"""
+    # LUNCH 14:10
+    if current_time == SCHEDULE["lunch"] and not is_message_sent_today("daily_report") and LAST_RUN.get("lunch") != now_key:
+        print("🍽️ [SCHEDULER] Avvio lunch brief...")
+        try:
+            LAST_RUN["lunch"] = now_key
+            generate_lunch_report()
+            set_message_sent_flag("daily_report"); 
+            save_daily_flags()
+        except Exception as e:
+            print(f"❌ [SCHEDULER] Errore lunch: {e}")
+
+    # EVENING 20:10
+    if current_time == SCHEDULE["evening"] and not is_message_sent_today("evening_report") and LAST_RUN.get("evening") != now_key:
+        print("🌆 [SCHEDULER] Avvio evening brief...")
+        try:
+            LAST_RUN["evening"] = now_key
+            generate_evening_report()
+            set_message_sent_flag("evening_report"); 
+            save_daily_flags()
+        except Exception as e:
+            print(f"❌ [SCHEDULER] Errore evening: {e}")
+
+    # Recovery pass ogni 10 minuti
     try:
-        response = urlopen(app_url, timeout=10)
-        return response.getcode() == 200
-    except URLError as e:
-        print(f"❌ [KEEP-ALIVE] Failed to ping app: {e}")
-        return False
+        _recovery_tick()
     except Exception as e:
-        print(f"❌ [KEEP-ALIVE] Errore generico: {e}")
-        return False
+        print(f"⚠️ [SCHEDULER] Recovery tick error: {e}")
+
 
 def is_keep_alive_time():
     """Controlla se siamo nella finestra di keep-alive (06:00-22:00)"""
@@ -3372,51 +2730,87 @@ def run_recovery_checks():
             except Exception as e:
                 print(f"❌ [RECOVERY] {key} errore:", e)
 
-def patched_check_and_send_scheduled_messages():
-    italy_tz = pytz.timezone('Europe/Rome')
-    now = datetime.datetime.now(italy_tz)
-    current_time = now.strftime("%H:%M")
-    now_key = now.strftime("%Y%m%d%H%M")
-
-    # 07:00 — RASSEGNA STAMPA (6 messaggi)
-    if current_time == "07:00" and GLOBAL_FLAGS.get("rassegna_stampa_last_run") != now_key:
-        print("🗞️ [SCHEDULER] Avvio Rassegna Stampa (lock+debounce)")
-        safe_send("rassegna_stampa_sent", "rassegna_stampa_last_run", generate_morning_news_briefing)
-        time.sleep(120)
-
-    # 08:10 — MORNING SNAPSHOT (1 messaggio)
-    if current_time == "08:10" and GLOBAL_FLAGS.get("morning_snapshot_last_run") != now_key:
-        print("🌅 [SCHEDULER] Avvio Morning Snapshot (lock+debounce)")
-        safe_send("morning_snapshot_sent", "morning_snapshot_last_run", generate_morning_snapshot)
-        time.sleep(120)
-
-    # 14:10 — LUNCH
-    if current_time == "14:10" and GLOBAL_FLAGS.get("daily_report_last_run") != now_key and not is_message_sent_today("daily_report"):
-        print("🍽️ [SCHEDULER] Avvio daily report di pranzo...")
-        safe_send("daily_report_sent", "daily_report_last_run", generate_daily_lunch_report, after_set_flag_name="daily_report")
-
-    # 20:10 — EVENING
-    if current_time == "20:10" and GLOBAL_FLAGS.get("evening_report_last_run") != now_key and not is_message_sent_today("evening_report"):
-        print("🌆 [SCHEDULER] Avvio evening report...")
-        safe_send("evening_report_sent", "evening_report_last_run", generate_evening_report, after_set_flag_name="evening_report")
-
-    # Recovery periodico
-    try:
-        run_recovery_checks()
-    except Exception as _e:
-        print("⚠️ [RECOVERY] Periodico fallito", _e)
-
-# Bind la funzione patchata
-check_and_send_scheduled_messages = patched_check_and_send_scheduled_messages
 
 
+def _today_key(dt=None):
+    if dt is None: dt = _now_it()
+    return dt.strftime("%Y%m%d")
 
-# === HEALTH ROUTE ===
-try:
-    app
-except NameError:
-    app = Flask(__name__)
+def _minute_key(dt=None):
+    if dt is None: dt = _now_it()
+    return dt.strftime("%Y%m%d%H%M")
 
-@app.route("/health")
-def health():
-    return "OK", 200
+
+def _recovery_tick():
+    now = _now_it()
+    hm = now.strftime("%H:%M")
+    def _within(target, window):
+        h = int(target[:2]); m = int(target[3:])
+        dt = now.replace(hour=h, minute=m, second=0, microsecond=0)
+        return (now >= dt) and ((now - dt).total_seconds() <= window*60)
+
+    # ogni 10 minuti
+    if now.minute % RECOVERY_INTERVAL_MINUTES != 0: 
+        return
+
+    # Rassegna
+    if not is_message_sent_today("rassegna") and _within(SCHEDULE["rassegna"], RECOVERY_WINDOWS["rassegna"]):
+        try:
+            generate_rassegna_stampa(); set_message_sent_flag("rassegna"); save_daily_flags()
+        except Exception as e:
+            log.warning(f"[RECOVERY] rassegna: {e}")
+
+    # Morning
+    if not is_message_sent_today("morning_news") and _within(SCHEDULE["morning"], RECOVERY_WINDOWS["morning"]):
+        try:
+            generate_morning_news(); set_message_sent_flag("morning_news"); save_daily_flags()
+        except Exception as e:
+            log.warning(f"[RECOVERY] morning: {e}")
+
+    # Lunch
+    if not is_message_sent_today("daily_report") and _within(SCHEDULE["lunch"], RECOVERY_WINDOWS["lunch"]):
+        try:
+            generate_lunch_report(); set_message_sent_flag("daily_report"); save_daily_flags()
+        except Exception as e:
+            log.warning(f"[RECOVERY] lunch: {e}")
+
+    # Evening
+    if not is_message_sent_today("evening_report") and _within(SCHEDULE["evening"], RECOVERY_WINDOWS["evening"]):
+        try:
+            generate_evening_report(); set_message_sent_flag("evening_report"); save_daily_flags()
+        except Exception as e:
+            log.warning(f"[RECOVERY] evening: {e}")
+
+
+def send_telegram_message(text: str) -> bool:
+    token = os.getenv("TELEGRAM_BOT_TOKEN","").strip()
+    chat  = os.getenv("TELEGRAM_CHAT_ID","").strip()
+    if not token or not chat:
+        return False
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    payload = {"chat_id": chat, "text": text, "disable_web_page_preview": True}
+    r = requests.post(url, data=payload, timeout=15)
+    if r.status_code == 400:
+        # fallback no formatting
+        payload.pop("parse_mode", None)
+        r = requests.post(url, data=payload, timeout=15)
+    return r.status_code == 200
+
+def send_telegram_message_long(text: str) -> bool:
+    MAXLEN = 3500
+    t = text.strip()
+    if len(t) <= MAXLEN:
+        return send_telegram_message(t)
+    ok_all = True
+    part = 1; start = 0
+    while start < len(t):
+        end = min(len(t), start+MAXLEN)
+        cut = t.rfind("\n", start, end)
+        if cut <= start: cut = end
+        chunk = t[start:cut]
+        hdr = f"PARTE {part}\n\n" if part>1 else ""
+        ok = send_telegram_message(hdr + chunk)
+        ok_all = ok_all and ok
+        start = cut; part += 1
+        time.sleep(1.2)
+    return ok_all
