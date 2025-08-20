@@ -2804,6 +2804,47 @@ def generate_morning_snapshot():
 
 
 
+# === RECOVERY FUNCTIONS ===
+def _recovery_tick():
+    now = _now_it()
+    hm = now.strftime("%H:%M")
+    def _within(target, window):
+        h = int(target[:2]); m = int(target[3:])
+        dt = now.replace(hour=h, minute=m, second=0, microsecond=0)
+        return (now >= dt) and ((now - dt).total_seconds() <= window*60)
+
+    # ogni 10 minuti
+    if now.minute % RECOVERY_INTERVAL_MINUTES != 0: 
+        return
+
+    # Rassegna
+    if not is_message_sent_today("rassegna") and _within(SCHEDULE["rassegna"], RECOVERY_WINDOWS["rassegna"]):
+        try:
+            generate_rassegna_stampa(); set_message_sent_flag("rassegna"); save_daily_flags()
+        except Exception as e:
+            log.warning(f"[RECOVERY] rassegna: {e}")
+
+    # Morning
+    if not is_message_sent_today("morning_news") and _within(SCHEDULE["morning"], RECOVERY_WINDOWS["morning"]):
+        try:
+            generate_morning_news(); set_message_sent_flag("morning_news"); save_daily_flags()
+        except Exception as e:
+            log.warning(f"[RECOVERY] morning: {e}")
+
+    # Lunch
+    if not is_message_sent_today("daily_report") and _within(SCHEDULE["lunch"], RECOVERY_WINDOWS["lunch"]):
+        try:
+            generate_lunch_report(); set_message_sent_flag("daily_report"); save_daily_flags()
+        except Exception as e:
+            log.warning(f"[RECOVERY] lunch: {e}")
+
+    # Evening
+    if not is_message_sent_today("evening_report") and _within(SCHEDULE["evening"], RECOVERY_WINDOWS["evening"]):
+        try:
+            generate_evening_report(); set_message_sent_flag("evening_report"); save_daily_flags()
+        except Exception as e:
+            log.warning(f"[RECOVERY] evening: {e}")
+
 # === SAFE SEND & RECOVERY HELPERS ===
 def safe_send(flag_name, last_key, send_callable, after_set_flag_name=None):
     """Imposta lock+debounce, invia, rollback su errore."""
@@ -2852,48 +2893,6 @@ def run_recovery_checks():
 def _today_key(dt=None):
     if dt is None: dt = _now_it()
     return dt.strftime("%Y%m%d")
-
-
-
-def _recovery_tick():
-    now = _now_it()
-    hm = now.strftime("%H:%M")
-    def _within(target, window):
-        h = int(target[:2]); m = int(target[3:])
-        dt = now.replace(hour=h, minute=m, second=0, microsecond=0)
-        return (now >= dt) and ((now - dt).total_seconds() <= window*60)
-
-    # ogni 10 minuti
-    if now.minute % RECOVERY_INTERVAL_MINUTES != 0: 
-        return
-
-    # Rassegna
-    if not is_message_sent_today("rassegna") and _within(SCHEDULE["rassegna"], RECOVERY_WINDOWS["rassegna"]):
-        try:
-            generate_rassegna_stampa(); set_message_sent_flag("rassegna"); save_daily_flags()
-        except Exception as e:
-            log.warning(f"[RECOVERY] rassegna: {e}")
-
-    # Morning
-    if not is_message_sent_today("morning_news") and _within(SCHEDULE["morning"], RECOVERY_WINDOWS["morning"]):
-        try:
-            generate_morning_news(); set_message_sent_flag("morning_news"); save_daily_flags()
-        except Exception as e:
-            log.warning(f"[RECOVERY] morning: {e}")
-
-    # Lunch
-    if not is_message_sent_today("daily_report") and _within(SCHEDULE["lunch"], RECOVERY_WINDOWS["lunch"]):
-        try:
-            generate_lunch_report(); set_message_sent_flag("daily_report"); save_daily_flags()
-        except Exception as e:
-            log.warning(f"[RECOVERY] lunch: {e}")
-
-    # Evening
-    if not is_message_sent_today("evening_report") and _within(SCHEDULE["evening"], RECOVERY_WINDOWS["evening"]):
-        try:
-            generate_evening_report(); set_message_sent_flag("evening_report"); save_daily_flags()
-        except Exception as e:
-            log.warning(f"[RECOVERY] evening: {e}")
 
 
 def send_telegram_message(text: str) -> bool:
