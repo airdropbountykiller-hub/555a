@@ -22,6 +22,21 @@ from urllib.error import URLError
 import flask
 from flask import Flask
 
+ITALY_TZ = pytz.timezone("Europe/Rome")
+
+def _now_it():
+    return datetime.datetime.now(ITALY_TZ)
+
+def _ts_now(dt=None):
+    return (dt or _now_it()).strftime("%H:%M:%S")
+
+def _today_key(dt=None):
+    return (dt or _now_it()).strftime("%Y%m%d")
+
+from flask import Flask, request
+
+app = Flask(__name__)
+
 # === 555-LITE SCHEDULE (patched) ===
 SCHEDULE = {
     "rassegna": "07:00",
