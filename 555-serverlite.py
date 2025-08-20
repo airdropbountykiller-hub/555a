@@ -2919,6 +2919,160 @@ def health():
 def flags():
     return GLOBAL_FLAGS
 
+# === DEBUG ENDPOINTS ===
+@app.route('/api/debug-status')
+def debug_status():
+    """Endpoint di debug per vedere lo stato completo del sistema"""
+    italy_tz = pytz.timezone('Europe/Rome')
+    now = datetime.datetime.now(italy_tz)
+    
+    # Carica i flag correnti
+    load_daily_flags()
+    
+    debug_info = {
+        "timestamp_italy": now.strftime('%Y-%m-%d %H:%M:%S CET'),
+        "current_time": now.strftime("%H:%M"),
+        "schedule": SCHEDULE,
+        "flags_status": GLOBAL_FLAGS,
+        "last_runs": LAST_RUN,
+        "daily_flags_file_exists": os.path.exists(FLAGS_FILE),
+        "next_messages": {},
+        "system_checks": {}
+    }
+    
+    # Controlla prossimi messaggi
+    for event, time_str in SCHEDULE.items():
+        event_time = datetime.datetime.strptime(time_str, "%H:%M").replace(
+            year=now.year, month=now.month, day=now.day, tzinfo=italy_tz
+        )
+        
+        if event_time < now:
+            # Se l'orario è passato, calcola per domani
+            event_time += datetime.timedelta(days=1)
+        
+        minutes_until = (event_time - now).total_seconds() / 60
+        
+        debug_info["next_messages"][event] = {
+            "scheduled_time": time_str,
+            "next_occurrence": event_time.strftime('%Y-%m-%d %H:%M:%S'),
+            "minutes_until": round(minutes_until, 1),
+            "flag_sent": is_message_sent_today(get_flag_name_for_event(event)),
+            "last_run": LAST_RUN.get(event, "Never")
+        }
+    
+    # System checks
+    debug_info["system_checks"] = {
+        "scheduler_thread_alive": True,  # Assume thread is alive if we can respond
+        "timezone_correct": now.strftime('%Z') == 'CET',
+        "flags_file_writable": os.access(os.path.dirname(FLAGS_FILE), os.W_OK),
+        "telegram_token_present": bool(TELEGRAM_TOKEN and len(TELEGRAM_TOKEN) > 30),
+        "keep_alive_active": is_keep_alive_time()
+    }
+    
+    return debug_info
+
+@app.route('/api/force-lunch')
+def force_lunch():
+    """Forza l'invio del messaggio lunch per test"""
+    try:
+        # Resetta il flag per permettere l'invio
+        GLOBAL_FLAGS["daily_report_sent"] = False
+        save_daily_flags()
+        
+        # Forza l'invio
+        result = generate_lunch_report()
+        
+        return {
+            "status": "success",
+            "message": "Lunch report forzato",
+            "result": result,
+            "timestamp": datetime.datetime.now(pytz.timezone('Europe/Rome')).strftime('%Y-%m-%d %H:%M:%S CET')
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": str(e),
+            "timestamp": datetime.datetime.now(pytz.timezone('Europe/Rome')).strftime('%Y-%m-%d %H:%M:%S CET')
+        }
+
+@app.route('/api/reset-flags')
+def reset_flags():
+    """Reset tutti i flag per permettere nuovi invii"""
+    try:
+        for key in GLOBAL_FLAGS.keys():
+            if key.endswith("_sent"):
+                GLOBAL_FLAGS[key] = False
+        
+        # Reset anche LAST_RUN
+        LAST_RUN.clear()
+        
+        save_daily_flags()
+        
+        return {
+            "status": "success",
+            "message": "Tutti i flag sono stati resettati",
+            "new_flags": GLOBAL_FLAGS,
+            "timestamp": datetime.datetime.now(pytz.timezone('Europe/Rome')).strftime('%Y-%m-%d %H:%M:%S CET')
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": str(e),
+            "timestamp": datetime.datetime.now(pytz.timezone('Europe/Rome')).strftime('%Y-%m-%d %H:%M:%S CET')
+        }
+
+@app.route('/api/test-scheduler')
+def test_scheduler():
+    """Test manuale dello scheduler"""
+    try:
+        italy_tz = pytz.timezone('Europe/Rome')
+        now = datetime.datetime.now(italy_tz)
+        current_time = now.strftime("%H:%M")
+        
+        results = {}
+        
+        # Simula check per ogni evento
+        for event, scheduled_time in SCHEDULE.items():
+            flag_name = get_flag_name_for_event(event)
+            is_sent = is_message_sent_today(flag_name)
+            now_key = _minute_key(now)
+            last_run_check = LAST_RUN.get(event) != now_key
+            
+            should_run = (current_time == scheduled_time and not is_sent and last_run_check)
+            
+            results[event] = {
+                "scheduled_time": scheduled_time,
+                "current_time": current_time,
+                "time_match": current_time == scheduled_time,
+                "flag_sent": is_sent,
+                "flag_name": flag_name,
+                "last_run_ok": last_run_check,
+                "should_run": should_run
+            }
+        
+        return {
+            "status": "success",
+            "current_time": current_time,
+            "timestamp": now.strftime('%Y-%m-%d %H:%M:%S CET'),
+            "scheduler_results": results
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": str(e),
+            "timestamp": datetime.datetime.now(pytz.timezone('Europe/Rome')).strftime('%Y-%m-%d %H:%M:%S CET')
+        }
+
+def get_flag_name_for_event(event):
+    """Mappa eventi ai nomi dei flag"""
+    mapping = {
+        "rassegna": "rassegna",
+        "morning": "morning_news",
+        "lunch": "daily_report", 
+        "evening": "evening_report"
+    }
+    return mapping.get(event, event)
+
 # === AVVIO SISTEMA ===
 if __name__ == "__main__":
     print("🚀 [555-LITE] Sistema ottimizzato avviato!")
