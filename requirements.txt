@@ -6,4 +6,6 @@ feedparser
 python-telegram-bot
 pandas
 pandas-datareader
+setuptools
+xgboost
 scikit-learn
