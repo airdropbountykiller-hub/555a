@@ -2,4 +2,5 @@ flask
 schedule
 requests
 pytz
+feedparser
 python-telegram-bot
