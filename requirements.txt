@@ -5,4 +5,5 @@ pytz
 feedparser
 python-telegram-bot
 pandas
+pandas-datareader
 scikit-learn
