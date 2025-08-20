@@ -9,6 +9,8 @@ import pytz
 import pandas
 import gc
 import json
+from xgboost import XGBClassifier
+
 # --- ML (scikit-learn) ---
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier, AdaBoostClassifier, ExtraTreesClassifier
 from sklearn.linear_model import LogisticRegression
