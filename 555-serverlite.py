@@ -10,6 +10,12 @@ import pandas
 import scikit-learn
 import gc
 import json
+# --- ML (scikit-learn) ---
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier, AdaBoostClassifier, ExtraTreesClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.svm import SVC
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.naive_bayes import GaussianNB
 from urllib.request import urlopen
 from urllib.error import URLError
 import flask
