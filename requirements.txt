@@ -4,3 +4,5 @@ requests
 pytz
 feedparser
 python-telegram-bot
+pandas
+scikit-learn
