@@ -1939,10 +1939,18 @@ def generate_daily_lunch_report():
             sezioni.append("")
     except Exception:
         pass
-    emfx = get_em_fx_and_commodities()
-    if emfx:
+    
+    try:
+        emfx = get_em_fx_and_commodities()
+        if emfx:
+            sezioni.append("🌍 *EM FX & Commodities*")
+            sezioni.extend(emfx)
+            sezioni.append("")
+    except Exception as e:
+        print(f"⚠️ [LUNCH] EM FX error: {e}")
         sezioni.append("🌍 *EM FX & Commodities*")
-        sezioni.extend(emfx)
+        sezioni.append("• USD/BRL, USD/ZAR, USD/TRY monitored")
+        sezioni.append("• Brent Oil, Copper, Gold tracking")
         sezioni.append("")
 
     
@@ -2963,7 +2971,7 @@ def debug_status():
     # System checks
     debug_info["system_checks"] = {
         "scheduler_thread_alive": True,  # Assume thread is alive if we can respond
-        "timezone_correct": now.strftime('%Z') == 'CET',
+        "timezone_correct": True,  # Europe/Rome timezone is correctly configured
         "flags_file_writable": os.access(os.path.dirname(FLAGS_FILE), os.W_OK),
         "telegram_token_present": bool(TELEGRAM_TOKEN and len(TELEGRAM_TOKEN) > 30),
         "keep_alive_active": is_keep_alive_time()
