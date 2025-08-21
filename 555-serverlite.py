@@ -1630,7 +1630,7 @@ def generate_morning_news_briefing():
             news_analysis_final = analyze_news_sentiment_and_impact()
             
             # Usa la funzione esistente per gli eventi (in background)
-            eventi_result = generate_morning_news_briefing()
+            eventi_result = genera_messaggio_eventi()
             
             # Messaggio finale con raccomandazioni ML
             final_parts = []
