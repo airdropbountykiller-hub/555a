@@ -1,0 +1,97 @@
+name: 555 Render Wake-Up System
+on:
+  schedule:
+    # Wake-up mattutino per rassegna stampa 07:00 CET
+    # Estate (CET = UTC+2): 06:50 CET = 04:50 UTC
+    # Inverno (CET = UTC+1): 06:50 CET = 05:50 UTC
+    - cron: "50 4 * * *"    # Estate: 06:50 CET
+    - cron: "50 5 * * *"    # Inverno: 06:50 CET
+    
+    # Wake-up per morning report 08:10 CET (backup del keep-alive)
+    - cron: "5 6 * * *"     # Estate: 08:05 CET
+    - cron: "5 7 * * *"     # Inverno: 08:05 CET
+    
+    # Wake-up per lunch report 14:10 CET
+    - cron: "5 12 * * *"    # Estate: 14:05 CET
+    - cron: "5 13 * * *"    # Inverno: 14:05 CET
+    
+    # Wake-up per evening report 20:10 CET
+    - cron: "5 18 * * *"    # Estate: 20:05 CET
+    - cron: "5 19 * * *"    # Inverno: 20:05 CET
+    
+  workflow_dispatch:  # Permette attivazione manuale
+
+jobs:
+  wake_render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    
+    steps:
+      - name: Get current time
+        run: |
+          echo "Avvio wake-up alle $(date)"
+          echo "Timezone: $(timedatectl show --property=Timezone --value || echo 'UTC')"
+      
+      - name: Wake-up Render App
+        run: |
+          echo "🚀 Inizio wake-up sequence per 555 Render App..."
+          
+          # Multiple wake-up attempts con retry
+          for attempt in 1 2 3; do
+            echo "Tentativo $attempt/3..."
+            
+            # Ping all'endpoint health (più leggero)
+            response=$(curl -sS --max-time 30 \
+              -w "%{http_code}" \
+              -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36" \
+              -H "Accept: application/json" \
+              -H "Cache-Control: no-cache" \
+              https://five55a.onrender.com/health || echo "000")
+            
+            if [[ "$response" == *"200"* ]] || [[ "$response" == *"ok"* ]]; then
+              echo "✅ Wake-up riuscito al tentativo $attempt"
+              echo "📡 Response: $response"
+              break
+            else
+              echo "⚠️ Tentativo $attempt fallito. Response: $response"
+              if [ $attempt -lt 3 ]; then
+                echo "⏳ Attesa 5 secondi prima del retry..."
+                sleep 5
+              fi
+            fi
+          done
+          
+          # Secondo ping all'endpoint principale per essere sicuri
+          sleep 3
+          echo "🔄 Secondo ping di conferma..."
+          
+          response2=$(curl -sS --max-time 20 \
+            -w "%{http_code}" \
+            -A "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1" \
+            https://five55a.onrender.com/ || echo "000")
+          
+          if [[ "$response2" == *"200"* ]]; then
+            echo "✅ Conferma wake-up completata!"
+          else
+            echo "⚠️ Conferma wake-up parziale. Response: $response2"
+          fi
+          
+          echo "🎯 Wake-up sequence terminata alle $(date)"
+
+      - name: Verify App Status
+        run: |
+          echo "🔍 Verifica finale stato app..."
+          
+          # Test finale con timeout ridotto
+          final_check=$(curl -sS --max-time 15 \
+            -A "GitHubActions-WakeUp/1.0" \
+            https://five55a.onrender.com/health || echo "FAILED")
+          
+          if [[ "$final_check" == *"ok"* ]]; then
+            echo "✅ App completamente attiva e responsive"
+            echo "📊 Status: $final_check"
+          else
+            echo "⚠️ App potrebbe non essere completamente attiva"
+            echo "📊 Response: $final_check"
+            exit 1  # Marca il workflow come fallito per alert
+          fi

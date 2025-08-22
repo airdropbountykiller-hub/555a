@@ -1,0 +1,115 @@
+name: 555 Emergency Reset & Wake-Up
+on:
+  workflow_dispatch:  # Solo attivazione manuale
+    inputs:
+      action_type:
+        description: 'Tipo di azione di emergenza'
+        required: true
+        default: 'wake_and_reset'
+        type: choice
+        options:
+        - wake_and_reset
+        - wake_only
+        - reset_only
+      message:
+        description: 'Messaggio personalizzato (opzionale)'
+        required: false
+        default: 'Emergency action triggered'
+
+jobs:
+  emergency_action:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    
+    steps:
+      - name: Display Action Info
+        run: |
+          echo "🚨 === 555 EMERGENCY ACTION ==="
+          echo "🕐 Timestamp: $(date)"
+          echo "🎯 Action Type: ${{ github.event.inputs.action_type }}"
+          echo "💬 Message: ${{ github.event.inputs.message }}"
+          echo "👤 Triggered by: ${{ github.actor }}"
+          echo "================================"
+      
+      - name: Wake-Up Render (if needed)
+        if: ${{ github.event.inputs.action_type == 'wake_and_reset' || github.event.inputs.action_type == 'wake_only' }}
+        run: |
+          echo "🚀 Eseguo wake-up emergency..."
+          
+          # Triple wake-up con diversi endpoints
+          endpoints=(
+            "https://five55a.onrender.com/health"
+            "https://five55a.onrender.com/"
+            "https://five55a.onrender.com/flags"
+          )
+          
+          for endpoint in "${endpoints[@]}"; do
+            echo "📡 Ping a: $endpoint"
+            
+            response=$(curl -sS --max-time 25 \
+              -w "%{http_code}" \
+              -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36" \
+              -H "Accept: application/json" \
+              "$endpoint" || echo "000")
+            
+            if [[ "$response" == *"200"* ]] || [[ "$response" == *"ok"* ]]; then
+              echo "✅ Wake-up OK: $endpoint"
+            else
+              echo "⚠️ Wake-up parziale: $endpoint (Response: $response)"
+            fi
+            
+            sleep 2
+          done
+      
+      - name: Reset Flags (if needed)
+        if: ${{ github.event.inputs.action_type == 'wake_and_reset' || github.event.inputs.action_type == 'reset_only' }}
+        run: |
+          echo "🔄 Eseguo reset flags emergency..."
+          
+          # Reset flags con retry
+          for attempt in 1 2; do
+            echo "Reset attempt $attempt/2..."
+            
+            reset_response=$(curl -sS --max-time 30 \
+              -w "%{http_code}" \
+              -A "GitHubActions-Emergency/1.0" \
+              -H "Accept: application/json" \
+              https://five55a.onrender.com/api/reset-flags || echo "000")
+            
+            if [[ "$reset_response" == *"200"* ]] || [[ "$reset_response" == *"success"* ]]; then
+              echo "✅ Reset flags completato!"
+              echo "📊 Response: $reset_response"
+              break
+            else
+              echo "⚠️ Reset attempt $attempt fallito. Response: $reset_response"
+              if [ $attempt -lt 2 ]; then
+                sleep 5
+              fi
+            fi
+          done
+      
+      - name: Final Verification
+        run: |
+          echo "🔍 Verifica finale stato sistema..."
+          
+          # Check flags status
+          flags_status=$(curl -sS --max-time 15 \
+            -A "GitHubActions-Verify/1.0" \
+            https://five55a.onrender.com/flags || echo "ERROR")
+          
+          echo "📋 Current flags status:"
+          echo "$flags_status"
+          
+          # Check debug status
+          debug_status=$(curl -sS --max-time 15 \
+            -A "GitHubActions-Verify/1.0" \
+            https://five55a.onrender.com/api/debug-status || echo "ERROR")
+          
+          if [[ "$debug_status" == *"success"* ]] || [[ "$debug_status" == *"555"* ]]; then
+            echo "✅ Sistema 555 completamente operativo"
+          else
+            echo "⚠️ Sistema potrebbe avere problemi"
+            echo "📊 Debug response: ${debug_status:0:200}..."
+          fi
+          
+          echo "🎯 Emergency action completata alle $(date)"
