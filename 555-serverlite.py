@@ -4358,6 +4358,28 @@ def check_and_send_scheduled_messages():
         except Exception as e:
             print(f"❌ [SCHEDULER] Errore evening: {e}")
 
+    # WEEKLY REPORT - Domenica 18:00
+    if now.weekday() == 6 and current_time == "18:00" and not is_message_sent_today("weekly_report") and LAST_RUN.get("weekly") != now_key:
+        print("📊 [SCHEDULER] Avvio weekly report domenicale...")
+        try:
+            LAST_RUN["weekly"] = now_key
+            genera_report_settimanale()
+            set_message_sent_flag("weekly_report")
+            save_daily_flags()
+        except Exception as e:
+            print(f"❌ [SCHEDULER] Errore weekly: {e}")
+
+    # MONTHLY REPORT - Primo del mese 10:00
+    if now.day == 1 and current_time == "10:00" and not is_message_sent_today("monthly_report") and LAST_RUN.get("monthly") != now_key:
+        print("📈 [SCHEDULER] Avvio monthly report mensile...")
+        try:
+            LAST_RUN["monthly"] = now_key
+            genera_report_mensile()
+            set_message_sent_flag("monthly_report")
+            save_daily_flags()
+        except Exception as e:
+            print(f"❌ [SCHEDULER] Errore monthly: {e}")
+
     # Recovery pass ogni 10 minuti
     try:
         _recovery_tick()
@@ -4840,12 +4862,26 @@ def run_recovery_checks():
     italy_tz = pytz.timezone('Europe/Rome')
     now = datetime.datetime.now(italy_tz)
     now_hhmm = now.strftime("%H:%M")
+    
+    # Schedule base giornalieri
     schedules = [
         ("rassegna", GLOBAL_FLAGS.get("rassegna_stampa_sent", False), "07:00", 10, "08:00", lambda: safe_send("rassegna_stampa_sent","rassegna_stampa_last_run", generate_morning_news_briefing)),
         ("morning", GLOBAL_FLAGS.get("morning_snapshot_sent", False), "08:10", 10, "12:00", lambda: safe_send("morning_snapshot_sent","morning_snapshot_last_run", generate_morning_snapshot)),
         ("lunch", GLOBAL_FLAGS.get("daily_report_sent", False), "14:10", 10, "19:00", lambda: safe_send("daily_report_sent","daily_report_last_run", generate_daily_lunch_report, after_set_flag_name="daily_report")),
         ("evening", GLOBAL_FLAGS.get("evening_report_sent", False), "20:10", 10, "23:50", lambda: safe_send("evening_report_sent","evening_report_last_run", generate_evening_report, after_set_flag_name="evening_report")),
     ]
+    
+    # WEEKLY RECOVERY - Solo domenica
+    if now.weekday() == 6:  # Domenica
+        schedules.append(
+            ("weekly", GLOBAL_FLAGS.get("weekly_report_sent", False), "18:00", 15, "23:00", lambda: safe_send("weekly_report_sent","weekly_report_last_run", genera_report_settimanale, after_set_flag_name="weekly_report"))
+        )
+    
+    # MONTHLY RECOVERY - Solo primo del mese
+    if now.day == 1:
+        schedules.append(
+            ("monthly", GLOBAL_FLAGS.get("monthly_report_sent", False), "10:00", 30, "18:00", lambda: safe_send("monthly_report_sent","monthly_report_last_run", genera_report_mensile, after_set_flag_name="monthly_report"))
+        )
     for key, sent, sched, grace, cutoff, sender in schedules:
         if should_recover(sent, sched, grace, cutoff, now_hhmm):
             print(f"🔁 [RECOVERY] Invio tardivo {key} (sched {sched})")
