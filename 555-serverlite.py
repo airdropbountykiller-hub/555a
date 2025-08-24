@@ -3604,7 +3604,7 @@ def generate_monthly_backtest_summary():
             print(f"Errore monthly rebalancing: {e}")
         
         monthly_lines.append("")
-        monthly_lines.append("💡 NOTA: Questo report mensile è generato automaticamente il primo giorno")
+        monthly_lines.append("💡 NOTA: Questo report mensile è generato automaticamente l'ultimo giorno")
         monthly_lines.append("    di ogni mese e include analisi ML, performance, risk metrics e outlook.")
         
         return "\n".join(monthly_lines)
@@ -4369,9 +4369,9 @@ def check_and_send_scheduled_messages():
         except Exception as e:
             print(f"❌ [SCHEDULER] Errore weekly: {e}")
 
-    # MONTHLY REPORT - Primo del mese 10:00
-    if now.day == 1 and current_time == "10:00" and not is_message_sent_today("monthly_report") and LAST_RUN.get("monthly") != now_key:
-        print("📈 [SCHEDULER] Avvio monthly report mensile...")
+    # MONTHLY REPORT - Ultimo giorno del mese 19:00
+    if is_last_day_of_month(now) and current_time == "19:00" and not is_message_sent_today("monthly_report") and LAST_RUN.get("monthly") != now_key:
+        print("📈 [SCHEDULER] Avvio monthly report (ultimo giorno del mese)...")
         try:
             LAST_RUN["monthly"] = now_key
             genera_report_mensile()
@@ -4386,6 +4386,20 @@ def check_and_send_scheduled_messages():
     except Exception as e:
         print(f"⚠️ [SCHEDULER] Recovery tick error: {e}")
 
+
+def is_last_day_of_month(dt):
+    """Controlla se la data fornita è l'ultimo giorno del mese"""
+    # Calcola il primo giorno del mese successivo
+    if dt.month == 12:
+        next_month = dt.replace(year=dt.year + 1, month=1, day=1)
+    else:
+        next_month = dt.replace(month=dt.month + 1, day=1)
+    
+    # L'ultimo giorno del mese corrente è il giorno prima del primo giorno del mese successivo
+    last_day_of_month = next_month - datetime.timedelta(days=1)
+    
+    # Confronta solo giorno, mese e anno
+    return dt.date() == last_day_of_month.date()
 
 def is_keep_alive_time():
     """Controlla se siamo nella finestra di keep-alive (06:00-22:00)"""
@@ -4877,10 +4891,10 @@ def run_recovery_checks():
             ("weekly", GLOBAL_FLAGS.get("weekly_report_sent", False), "18:00", 15, "23:00", lambda: safe_send("weekly_report_sent","weekly_report_last_run", genera_report_settimanale, after_set_flag_name="weekly_report"))
         )
     
-    # MONTHLY RECOVERY - Solo primo del mese
-    if now.day == 1:
+    # MONTHLY RECOVERY - Solo ultimo giorno del mese
+    if is_last_day_of_month(now):
         schedules.append(
-            ("monthly", GLOBAL_FLAGS.get("monthly_report_sent", False), "10:00", 30, "18:00", lambda: safe_send("monthly_report_sent","monthly_report_last_run", genera_report_mensile, after_set_flag_name="monthly_report"))
+            ("monthly", GLOBAL_FLAGS.get("monthly_report_sent", False), "19:00", 30, "23:00", lambda: safe_send("monthly_report_sent","monthly_report_last_run", genera_report_mensile, after_set_flag_name="monthly_report"))
         )
     for key, sent, sched, grace, cutoff, sender in schedules:
         if should_recover(sent, sched, grace, cutoff, now_hhmm):
