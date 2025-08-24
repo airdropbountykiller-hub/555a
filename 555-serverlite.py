@@ -54,7 +54,7 @@ SCHEDULE = {
     "evening":  "20:10",
 }
 RECOVERY_INTERVAL_MINUTES = 10
-RECOVERY_WINDOWS = {"rassegna": 60, "morning": 80, "lunch": 80, "evening": 80}
+RECOVERY_WINDOWS = {"rassegna": 30, "morning": 30, "lunch": 30, "evening": 30}
 ITALY_TZ = pytz.timezone("Europe/Rome")
 LAST_RUN = {}  # per-minute debounce
 
@@ -2232,7 +2232,6 @@ def generate_morning_news_briefing():
                 final_parts.append("")
                 
             # Outlook mercati per la giornata
-            final_parts.extend(build_calendar_lines(7))
             final_parts.append("🔮 *OUTLOOK MERCATI OGGI*")
             final_parts.append("• 🇺🇸 Wall Street: Apertura 15:30 CET - Watch tech earnings")
             final_parts.append("• 🇪🇺 Europa: Chiusura 17:30 CET - Banks & Energy focus")
@@ -4258,11 +4257,27 @@ def _recovery_tick():
     if now.minute % RECOVERY_INTERVAL_MINUTES != 0: 
         return
 
-    # Rassegna
+    # 🔥 ANTI-SPAM CHECK: Se siamo oltre 30 minuti dal target, ferma recovery
+    def _beyond_reasonable_window(target, max_window_minutes=30):
+        h = int(target[:2]); m = int(target[3:])
+        dt = now.replace(hour=h, minute=m, second=0, microsecond=0)
+        return (now - dt).total_seconds() > max_window_minutes * 60
+
+    # Rassegna - con controllo anti-spam
     if not is_message_sent_today("rassegna") and _within(SCHEDULE["rassegna"], RECOVERY_WINDOWS["rassegna"]):
+        # Controllo anti-spam: se siamo oltre 30 minuti, non continuare
+        if _beyond_reasonable_window(SCHEDULE["rassegna"], 30):
+            print(f"🛑 [RECOVERY-STOP] Rassegna oltre finestra ragionevole (30min), stop recovery")
+            # Imposta flag per fermare ulteriori tentativi
+            set_message_sent_flag("rassegna")
+            return
+        
         try:
+            print(f"🔁 [RECOVERY] Tentativo recovery rassegna stampa...")
             generate_rassegna_stampa(); set_message_sent_flag("rassegna"); save_daily_flags()
+            print(f"✅ [RECOVERY] Rassegna stampa inviata con successo")
         except Exception as e:
+            print(f"❌ [RECOVERY] rassegna: {e}")
             log.warning(f"[RECOVERY] rassegna: {e}")
 
     # Morning
@@ -4598,8 +4613,34 @@ if __name__ == "__main__":
     print(f"💾 [555-LITE] RAM extra disponibile per elaborazioni avanzate")
     print(f"📱 [555-LITE] Focus totale su qualità messaggi Telegram")
     
-    # Carica i flag dai file salvati
-    load_daily_flags()
+    # === AUTO-RESET FLAGS ALL'AVVIO ===
+    italy_tz = pytz.timezone('Europe/Rome')
+    boot_time = datetime.datetime.now(italy_tz)
+    
+    # Se ci avviamo nella finestra mattutina (06:00-07:30), reset automatico dei flag
+    if 6 <= boot_time.hour < 8:  # Finestra critica mattutina
+        print(f"⏰ [AUTO-RESET] Avvio alle {boot_time.strftime('%H:%M')} - Reset automatico flag per giornata pulita")
+        
+        # Reset tutti i flag giornalieri
+        for key in GLOBAL_FLAGS.keys():
+            if key.endswith("_sent"):
+                GLOBAL_FLAGS[key] = False
+        
+        # Reset anche LAST_RUN per sicurezza
+        LAST_RUN.clear()
+        
+        # Aggiorna data corrente
+        GLOBAL_FLAGS["last_reset_date"] = boot_time.strftime("%Y%m%d")
+        
+        # Salva i flag resettati
+        save_daily_flags()
+        
+        print(f"✅ [AUTO-RESET] Flag resettati automaticamente all'avvio mattutino")
+        print(f"📋 [AUTO-RESET] Tutti i messaggi giornalieri sono ora pronti per l'invio")
+    else:
+        # Avvio normale - carica i flag esistenti
+        load_daily_flags()
+        print(f"📁 [NORMAL-BOOT] Avvio alle {boot_time.strftime('%H:%M')} - Flag caricati normalmente")
     
     # Avvia scheduler in background
     scheduler_thread = threading.Thread(target=main_scheduler_loop, daemon=True)
