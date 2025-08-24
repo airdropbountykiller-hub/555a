@@ -1,11 +1,33 @@
-flask
-schedule
-requests
-pytz
-feedparser
-python-telegram-bot
-pandas
-pandas-datareader
-setuptools
-xgboost
-scikit-learn
+# === 555-ServerLite Requirements ===
+# Sistema ottimizzato per notifiche Telegram con dati live
+
+# Core Web Framework
+Flask>=2.0.0
+Werkzeug>=2.0.0
+
+# Data Processing
+pandas>=1.3.0
+numpy>=1.21.0
+
+# HTTP Requests
+requests>=2.25.0
+
+# RSS Feed Processing
+feedparser>=6.0.0
+
+# Financial Data APIs
+pandas-datareader>=0.10.0
+yfinance>=0.1.70
+
+# Machine Learning
+scikit-learn>=1.0.0
+xgboost>=1.5.0
+
+# Time Zone Management
+pytz>=2021.1
+
+# Telegram Integration (optional - hardcoded tokens)
+# python-telegram-bot>=13.0
+
+# Task Scheduling (using custom scheduler)
+# schedule>=1.1.0

@@ -4617,8 +4617,8 @@ if __name__ == "__main__":
     italy_tz = pytz.timezone('Europe/Rome')
     boot_time = datetime.datetime.now(italy_tz)
     
-    # Se ci avviamo nella finestra mattutina (06:00-07:30), reset automatico dei flag
-    if 6 <= boot_time.hour < 8:  # Finestra critica mattutina
+    # Se ci avviamo nella finestra mattutina (06:00-06:59), reset automatico dei flag
+    if 6 <= boot_time.hour <= 6:  # Finestra critica mattutina (fino a 06:59)
         print(f"⏰ [AUTO-RESET] Avvio alle {boot_time.strftime('%H:%M')} - Reset automatico flag per giornata pulita")
         
         # Reset tutti i flag giornalieri
