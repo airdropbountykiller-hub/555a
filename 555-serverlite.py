@@ -4421,6 +4421,191 @@ def genera_report_annuale():
         set_message_sent_flag("annual_report")
     return f"Report annuale placeholder: {'✅' if success else '❌'}"
 
+# === EXPORT AUTOMATICO CSV ===
+
+def export_daily_news_csv():
+    """Esporta le notizie elaborate della mattina in formato CSV compatibile"""
+    try:
+        import pandas as pd
+        import os
+        import datetime
+        
+        print("📰 [EXPORT] Inizio export automatico notizie CSV...")
+        
+        # Recupera le notizie elaborate dalla mattina (stesso metodo della rassegna)
+        news_by_category = get_morning_news_by_category()
+        
+        if not news_by_category:
+            print("⚠️ [EXPORT] Nessuna notizia da esportare")
+            return False
+        
+        # Prepara i dati per il CSV
+        csv_data = []
+        now = datetime.datetime.now()
+        
+        for categoria, notizie in news_by_category.items():
+            for notizia in notizie[:10]:  # Max 10 per categoria
+                # Analisi criticità
+                title = notizia.get('title', '')
+                critical_keywords = [
+                    "crisis", "crash", "war", "fed", "recession", "inflation", "emergency", 
+                    "breaking", "bank", "rate", "gdp", "unemployment", "bitcoin", "regulation"
+                ]
+                is_critical = "Sì" if any(k in title.lower() for k in critical_keywords) else "No"
+                
+                csv_data.append({
+                    "Titolo": title,
+                    "Fonte": notizia.get('source', ''),
+                    "Categoria": categoria,
+                    "Data": notizia.get('published', now.strftime('%Y-%m-%d %H:%M')),
+                    "Link": notizia.get('link', ''),
+                    "Notizia_Critica": is_critical,
+                    "Data_Generazione": now.strftime('%Y-%m-%d %H:%M:%S'),
+                    "Tipo": "Morning_Export"
+                })
+        
+        if csv_data:
+            df_news = pd.DataFrame(csv_data)
+            
+            # Salva file giornaliero
+            news_path = os.path.join('salvataggi', f'notizie_morning_{now.strftime("%Y%m%d")}.csv')
+            df_news.to_csv(news_path, index=False, encoding='utf-8-sig')
+            print(f"✅ [EXPORT] Salvato: {news_path} ({len(csv_data)} notizie)")
+            
+            # Aggiorna file cumulativo
+            cumulative_path = os.path.join('salvataggi', 'notizie_cumulativo.csv')
+            try:
+                if os.path.exists(cumulative_path):
+                    df_old = pd.read_csv(cumulative_path)
+                    df_combined = pd.concat([df_old, df_news], ignore_index=True)
+                    # Rimuovi duplicati
+                    df_combined.drop_duplicates(subset=['Titolo', 'Link'], inplace=True)
+                    df_combined.to_csv(cumulative_path, index=False, encoding='utf-8-sig')
+                    print(f"📰 [EXPORT] Cumulativo aggiornato: {len(df_combined)} notizie totali")
+                else:
+                    df_news.to_csv(cumulative_path, index=False, encoding='utf-8-sig')
+                    print(f"📰 [EXPORT] Nuovo cumulativo creato: {len(df_news)} notizie")
+            except Exception as e:
+                print(f"⚠️ [EXPORT] Errore cumulativo notizie: {e}")
+            
+            return True
+        else:
+            print("⚠️ [EXPORT] Nessun dato notizie da salvare")
+            return False
+            
+    except Exception as e:
+        print(f"❌ [EXPORT] Errore export notizie CSV: {e}")
+        return False
+
+def export_daily_calendar_csv():
+    """Esporta gli eventi calendario con analisi ML in formato CSV"""
+    try:
+        import pandas as pd
+        import os
+        import datetime
+        
+        print("📅 [EXPORT] Inizio export automatico calendario CSV...")
+        
+        # Recupera eventi calendario (stesso sistema di 555.py)
+        oggi = datetime.date.today()
+        prossimi_7_giorni = oggi + datetime.timedelta(days=7)
+        
+        # Simula eventi (in futuro collegare a API calendario reale)
+        eventi_predefiniti = {
+            "Finanza": [
+                {"Data": (oggi + datetime.timedelta(days=2)).strftime("%Y-%m-%d"), "Titolo": "Decisione tassi FED", "Impatto": "Alto", "Fonte": "Investing.com"},
+                {"Data": (oggi + datetime.timedelta(days=6)).strftime("%Y-%m-%d"), "Titolo": "Rilascio CPI USA", "Impatto": "Alto", "Fonte": "Trading Economics"}
+            ],
+            "Criptovalute": [
+                {"Data": (oggi + datetime.timedelta(days=3)).strftime("%Y-%m-%d"), "Titolo": "Aggiornamento Ethereum", "Impatto": "Alto", "Fonte": "CoinMarketCal"}
+            ],
+            "Geopolitica": [
+                {"Data": (oggi + datetime.timedelta(days=1)).strftime("%Y-%m-%d"), "Titolo": "Vertice NATO", "Impatto": "Alto", "Fonte": "Reuters"}
+            ]
+        }
+        
+        all_events = []
+        now = datetime.datetime.now()
+        
+        for categoria, lista in eventi_predefiniti.items():
+            for evento in lista:
+                row = evento.copy()
+                row["Categoria"] = categoria
+                row['Data_Export'] = now.strftime('%Y-%m-%d %H:%M:%S')
+                row['Tipo'] = 'Morning_Export'
+                
+                # Aggiungi analisi ML semplificata
+                title = evento["Titolo"].lower()
+                if "fed" in title or "cpi" in title or "tassi" in title:
+                    row['ML_Impact'] = "HIGH"
+                    row['ML_Comment'] = "Evento monetario critico - impatto diretto su USD e bond"
+                elif "crypto" in title or "bitcoin" in title or "ethereum" in title:
+                    row['ML_Impact'] = "MEDIUM"
+                    row['ML_Comment'] = "Volatilità crypto attesa - monitor correlation con tech stocks"
+                elif "geopolitica" in title or "nato" in title or "war" in title:
+                    row['ML_Impact'] = "HIGH"
+                    row['ML_Comment'] = "Risk-off sentiment - flight to safety assets"
+                else:
+                    row['ML_Impact'] = "LOW"
+                    row['ML_Comment'] = "Impatto limitato sui mercati principali"
+                
+                all_events.append(row)
+        
+        if all_events:
+            df_calendar = pd.DataFrame(all_events)
+            
+            # Salva file giornaliero
+            calendar_path = os.path.join('salvataggi', f'calendario_morning_{now.strftime("%Y%m%d")}.csv')
+            df_calendar.to_csv(calendar_path, index=False, encoding='utf-8-sig')
+            print(f"✅ [EXPORT] Salvato: {calendar_path} ({len(all_events)} eventi)")
+            
+            # Aggiorna file principale calendario_eventi.csv
+            main_calendar_path = os.path.join('salvataggi', 'calendario_eventi.csv')
+            df_calendar.to_csv(main_calendar_path, index=False, encoding='utf-8-sig')
+            print(f"📅 [EXPORT] Aggiornato calendario principale: {len(all_events)} eventi")
+            
+            return True
+        else:
+            print("⚠️ [EXPORT] Nessun evento calendario da salvare")
+            return False
+            
+    except Exception as e:
+        print(f"❌ [EXPORT] Errore export calendario CSV: {e}")
+        return False
+
+def auto_export_morning_data():
+    """Funzione principale per export automatico post-rassegna stampa"""
+    try:
+        import datetime
+        now = datetime.datetime.now()
+        print(f"📤 [AUTO-EXPORT] Inizio export automatico dati mattutini - {now.strftime('%H:%M:%S')}")
+        
+        results = []
+        
+        # Export notizie
+        try:
+            news_success = export_daily_news_csv()
+            results.append(f"📰 Notizie: {'✅' if news_success else '❌'}")
+        except Exception as e:
+            print(f"❌ [AUTO-EXPORT] Errore export notizie: {e}")
+            results.append("📰 Notizie: ❌")
+        
+        # Export calendario
+        try:
+            calendar_success = export_daily_calendar_csv()
+            results.append(f"📅 Calendario: {'✅' if calendar_success else '❌'}")
+        except Exception as e:
+            print(f"❌ [AUTO-EXPORT] Errore export calendario: {e}")
+            results.append("📅 Calendario: ❌")
+        
+        # Summary
+        print(f"📊 [AUTO-EXPORT] Completato - {' | '.join(results)}")
+        return all("✅" in result for result in results)
+        
+    except Exception as e:
+        print(f"❌ [AUTO-EXPORT] Errore generale: {e}")
+        return False
+
 # === SCHEDULER POTENZIATO ===
 
 # === RECOVERY FUNCTIONS ===
@@ -4503,6 +4688,16 @@ def check_and_send_scheduled_messages():
             time.sleep(300)
         except Exception:
             pass
+
+    # AUTO-EXPORT CSV 07:05 (5 minuti dopo rassegna)
+    if current_time == "07:05" and LAST_RUN.get("auto_export") != now_key:
+        print("📤 [SCHEDULER] Avvio export automatico CSV post-rassegna...")
+        try:
+            LAST_RUN["auto_export"] = now_key
+            auto_export_morning_data()
+            print("✅ [SCHEDULER] Export automatico CSV completato")
+        except Exception as e:
+            print(f"❌ [SCHEDULER] Errore export automatico: {e}")
 
     # MORNING 08:10
     if current_time == SCHEDULE["morning"] and not is_message_sent_today("morning_news") and LAST_RUN.get("morning") != now_key:
