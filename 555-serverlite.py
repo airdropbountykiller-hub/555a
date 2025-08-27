@@ -1453,6 +1453,145 @@ def _send_single_message_lite(clean_msg, url):
     
     return False
 
+# === SISTEMA CONTROLLO WEEKEND E FESTIVITÀ ===
+def is_weekend_or_holiday(check_date=None):
+    """Controlla se è weekend o festività finanziaria"""
+    if check_date is None:
+        check_date = datetime.date.today()
+    
+    # Weekend
+    if check_date.weekday() in [5, 6]:  # Sabato=5, Domenica=6
+        return True, "Weekend"
+    
+    # Festività principali USA/Europa (2024-2025)
+    holidays_2024 = [
+        (1, 1),   # Capodanno
+        (1, 15),  # MLK Day (3° lunedì gennaio)
+        (2, 19),  # Presidents Day (3° lunedì febbraio)
+        (3, 29),  # Good Friday
+        (5, 27),  # Memorial Day (ultimo lunedì maggio)
+        (6, 19),  # Juneteenth
+        (7, 4),   # Independence Day
+        (9, 2),   # Labor Day (1° lunedì settembre)
+        (10, 14), # Columbus Day (2° lunedì ottobre)
+        (11, 11), # Veterans Day
+        (11, 28), # Thanksgiving (4° giovedì novembre)
+        (12, 25), # Christmas
+    ]
+    
+    holidays_2025 = [
+        (1, 1),   # Capodanno
+        (1, 20),  # MLK Day
+        (2, 17),  # Presidents Day
+        (4, 18),  # Good Friday
+        (5, 26),  # Memorial Day
+        (6, 19),  # Juneteenth
+        (7, 4),   # Independence Day
+        (9, 1),   # Labor Day
+        (10, 13), # Columbus Day
+        (11, 11), # Veterans Day
+        (11, 27), # Thanksgiving
+        (12, 25), # Christmas
+    ]
+    
+    current_holidays = holidays_2025 if check_date.year == 2025 else holidays_2024
+    
+    for month, day in current_holidays:
+        if check_date.month == month and check_date.day == day:
+            return True, "Festività"
+    
+    return False, "Mercati Aperti"
+
+def get_market_status_message():
+    """Restituisce messaggio sullo stato dei mercati"""
+    is_closed, reason = is_weekend_or_holiday()
+    
+    if is_closed:
+        if reason == "Weekend":
+            return "🔴 *MERCATI CHIUSI* - Weekend (Sabato/Domenica)"
+        else:
+            return f"🔴 *MERCATI CHIUSI* - {reason}"
+    else:
+        return "🟢 *MERCATI APERTI* - Sessione di trading attiva"
+
+def format_price_with_nan_check(value, asset_name, format_type="standard"):
+    """Formatta prezzo con controllo NaN e fallback"""
+    try:
+        # Controlli per valori non validi
+        if value is None or str(value).lower() in ['nan', 'none', '']:
+            return f"• {asset_name}: Prezzo non disponibile - Dati in aggiornamento"
+        
+        # Converti a float se necessario
+        if isinstance(value, str):
+            try:
+                value = float(value)
+            except (ValueError, TypeError):
+                return f"• {asset_name}: Formato prezzo non valido - Controllo dati"
+        
+        # Controlli per valori numerici non validi
+        if not isinstance(value, (int, float)) or value <= 0:
+            return f"• {asset_name}: Valore prezzo non valido - Verifica sorgente dati"
+        
+        # Formattazione basata sul tipo
+        if format_type == "crypto" and value >= 1000:
+            price_str = f"${value:,.0f}"
+        elif format_type == "crypto" and value >= 1:
+            price_str = f"${value:,.2f}"
+        elif format_type == "crypto":
+            price_str = f"${value:.4f}"
+        elif format_type == "forex":
+            price_str = f"{value:.4f}"
+        elif format_type == "index" and value >= 10000:
+            price_str = f"{value:,.0f}"
+        elif format_type == "index":
+            price_str = f"{value:,.1f}"
+        else:  # standard
+            if value >= 1000:
+                price_str = f"${value:,.2f}"
+            else:
+                price_str = f"${value:.2f}"
+        
+        return price_str
+        
+    except Exception as e:
+        print(f"❌ [PRICE-FORMAT] Errore formattazione {asset_name}: {e}")
+        return f"• {asset_name}: Errore formattazione prezzo - Sistema in verifica"
+
+def safe_get_live_price(live_data, asset_name, category, description=""):
+    """Recupera prezzo live con gestione sicura di valori NaN"""
+    try:
+        # Cerca l'asset nella categoria specificata
+        if category not in live_data or asset_name not in live_data[category]:
+            return f"• {asset_name}: Dati non disponibili - API in caricamento - {description}"
+        
+        asset_data = live_data[category][asset_name]
+        price = asset_data.get('price', None)
+        change_pct = asset_data.get('change_pct', None)
+        
+        # Controllo NaN per prezzo
+        price_str = format_price_with_nan_check(price, asset_name, 
+            "crypto" if category == "crypto" else "forex" if category == "forex" else "index" if category == "indices" else "standard")
+        
+        if "non disponibile" in price_str or "non valido" in price_str or "errore" in price_str.lower():
+            return f"• {asset_name}: {price_str.split(':')[1].strip()} - {description}"
+        
+        # Controllo NaN per variazione percentuale
+        if change_pct is None or str(change_pct).lower() == 'nan':
+            change_str = "(variazione non disponibile)"
+        else:
+            try:
+                change_pct = float(change_pct)
+                change_sign = "+" if change_pct >= 0 else ""
+                change_str = f"({change_sign}{change_pct:.1f}%)"
+            except (ValueError, TypeError):
+                change_str = "(variazione non valida)"
+        
+        return f"• {asset_name}: {price_str} {change_str} - {description}"
+        
+    except Exception as e:
+        print(f"❌ [SAFE-PRICE] Errore recupero {asset_name}: {e}")
+        return f"• {asset_name}: Errore tecnico recupero dati - Supporto in verifica - {description}"
+
 # === CALENDARIO EVENTI (Stesso del sistema completo) ===
 today = datetime.date.today()
 
@@ -2033,7 +2172,7 @@ def generate_morning_news_briefing():
             
             msg_parts = []
             
-            # Header per categoria
+            # Header per categoria con buongiorno
             emoji_map = {
                 'Finanza': '💰',
                 'Criptovalute': '₿', 
@@ -2042,7 +2181,11 @@ def generate_morning_news_briefing():
             }
             emoji = emoji_map.get(categoria, '📊')
             
-            msg_parts.append(f"{emoji} *PRESS REVIEW - {categoria.upper()}*")
+            # Aggiungi buongiorno al primo messaggio
+            if i == 1:
+                msg_parts.append(f"🌅 *BUONGIORNO! PRESS REVIEW - {categoria.upper()}*")
+            else:
+                msg_parts.append(f"{emoji} *PRESS REVIEW - {categoria.upper()}*")
             msg_parts.append(f"📅 {now.strftime('%d/%m/%Y %H:%M')} • Messaggio {i}/6")
             msg_parts.append("─" * 35)
             msg_parts.append("")
@@ -2068,43 +2211,68 @@ def generate_morning_news_briefing():
                     msg_parts.append(f"🔗 {notizia['link'][:60]}...")
                 msg_parts.append("")
             
-            # === AGGIUNGE SEZIONE PREZZI LIVE PER CATEGORIA RILEVANTE ===
+            # === STATO MERCATI E PREZZI LIVE CON CONTROLLI WEEKEND/FESTIVITÀ ===
             if categoria in ['Finanza', 'Criptovalute']:
                 try:
+                    # Controllo weekend/festività per mercati tradizionali
+                    market_status = get_market_status_message()
+                    
+                    if categoria == 'Finanza':
+                        # Aggiungi sempre lo stato dei mercati per la sezione Finanza
+                        msg_parts.append("📊 *STATUS MERCATI & PREZZI LIVE*")
+                        msg_parts.append(market_status)
+                        msg_parts.append("")
+                    
                     all_live_data = get_all_live_data()
                     if all_live_data:
-                        msg_parts.append("📈 *PREZZI LIVE CORRELATI*")
-                        msg_parts.append("")
-                        
                         if categoria == 'Finanza':
                             # Mostra i principali indici USA/EU per notizie finanziarie
                             for asset_name in ['S&P 500', 'NASDAQ', 'FTSE MIB', 'DAX']:
-                                line = format_live_price(asset_name, all_live_data, "Key index tracker")
-                                if "non disponibile" not in line:
-                                    msg_parts.append(line)
+                                line = safe_get_live_price(all_live_data, asset_name, 
+                                    'stocks' if asset_name in ['S&P 500', 'NASDAQ'] else 'indices', 
+                                    "Key index tracker")
+                                msg_parts.append(line)
                             
                             # Aggiungi forex chiave
                             for asset_name in ['EUR/USD', 'DXY']:
-                                line = format_live_price(asset_name, all_live_data, "FX focus")
-                                if "non disponibile" not in line:
-                                    msg_parts.append(line)
+                                line = safe_get_live_price(all_live_data, asset_name, 'forex', "FX focus")
+                                msg_parts.append(line)
                         
                         elif categoria == 'Criptovalute':
+                            msg_parts.append("📈 *CRYPTO LIVE (24/7)*")
+                            msg_parts.append("")
+                            
                             # Mostra le principali crypto per notizie crypto
                             for asset_name in ['BTC', 'ETH', 'BNB', 'SOL']:
-                                line = format_live_price(asset_name, all_live_data, "Crypto tracker")
-                                if "non disponibile" not in line:
-                                    msg_parts.append(line)
+                                line = safe_get_live_price(all_live_data, asset_name, 'crypto', "Crypto tracker")
+                                msg_parts.append(line)
                             
-                            # Market cap totale
-                            if 'TOTAL_MARKET_CAP' in all_live_data.get('crypto', {}):
-                                total_cap = all_live_data['crypto']['TOTAL_MARKET_CAP']
-                                cap_t = total_cap / 1e12
-                                msg_parts.append(f"• Total Cap: ${cap_t:.2f}T - Market expansion tracking")
+                            # Market cap totale con controllo NaN
+                            try:
+                                total_cap = all_live_data.get('crypto', {}).get('TOTAL_MARKET_CAP', 0)
+                                if total_cap and str(total_cap).lower() != 'nan' and total_cap > 0:
+                                    cap_t = total_cap / 1e12
+                                    msg_parts.append(f"• Total Cap: ${cap_t:.2f}T - Market expansion tracking")
+                                else:
+                                    msg_parts.append("• Total Cap: Calcolo in corso - Market data updating")
+                            except Exception:
+                                msg_parts.append("• Total Cap: Dati non disponibili - System check")
                         
                         msg_parts.append("")
+                    else:
+                        msg_parts.append("📊 *PREZZI LIVE CORRELATI*")
+                        if categoria == 'Finanza':
+                            msg_parts.append("• Indici: Dati in caricamento - API verification")
+                            msg_parts.append("• Forex: Dati in caricamento - System check")
+                        else:
+                            msg_parts.append("• Crypto: Dati in caricamento - API verification")
+                        msg_parts.append("")
+                        
                 except Exception as e:
                     print(f"⚠️ [RASSEGNA] Errore aggiunta prezzi live per {categoria}: {e}")
+                    msg_parts.append("📊 *PREZZI LIVE CORRELATI*")
+                    msg_parts.append("• Sistema prezzi temporaneamente non disponibile")
+                    msg_parts.append("")
             
             # Footer categoria
             msg_parts.append("─" * 35)
@@ -2176,8 +2344,7 @@ def generate_morning_news_briefing():
         
         # === MESSAGGIO 6: CALENDARIO EVENTI + RACCOMANDAZIONI ML ===
         try:
-            # Recupera raccomandazioni ML per calendario
-            news_analysis_final = analyze_news_sentiment_and_impact()
+            print("🔄 [MORNING] Preparazione messaggio 6 (finale)...")
             
             # Messaggio finale con calendario e raccomandazioni ML (NO duplicazione notizie)
             final_parts = []
@@ -2190,12 +2357,24 @@ def generate_morning_news_briefing():
             final_parts.append("🗓️ *CALENDARIO EVENTI CHIAVE*")
             final_parts.append("")
             
-            # Usa la funzione calendar helper
-            calendar_lines = build_calendar_lines(7)
-            if calendar_lines and len(calendar_lines) > 2:  # Se ci sono eventi
-                final_parts.extend(calendar_lines)
-            else:
-                # Eventi simulati se calendar non disponibile
+            # Usa la funzione calendar helper con gestione errori robusta
+            try:
+                calendar_lines = build_calendar_lines(7)
+                if calendar_lines and len(calendar_lines) > 2:  # Se ci sono eventi
+                    final_parts.extend(calendar_lines)
+                    print("✅ [MORNING] Calendario eventi caricato correttamente")
+                else:
+                    print("⚠️ [MORNING] Calendario eventi vuoto, uso fallback")
+                    # Eventi simulati se calendar non disponibile
+                    final_parts.append("📅 **Eventi Programmati (Prossimi 7 giorni):**")
+                    final_parts.append("• 🇺🇸 Fed Meeting: Mercoledì 15:00 CET")
+                    final_parts.append("• 🇪🇺 ECB Speech: Giovedì 14:30 CET")
+                    final_parts.append("• 📊 US CPI Data: Venerdì 14:30 CET")
+                    final_parts.append("• 🏛️ Bank Earnings: Multiple giorni")
+                    final_parts.append("")
+            except Exception as cal_e:
+                print(f"❌ [MORNING] Errore calendario eventi: {cal_e}")
+                # Fallback garantito
                 final_parts.append("📅 **Eventi Programmati (Prossimi 7 giorni):**")
                 final_parts.append("• 🇺🇸 Fed Meeting: Mercoledì 15:00 CET")
                 final_parts.append("• 🇪🇺 ECB Speech: Giovedì 14:30 CET")
@@ -4591,6 +4770,60 @@ def reset_flags():
             "timestamp": datetime.datetime.now(pytz.timezone('Europe/Rome')).strftime('%Y-%m-%d %H:%M:%S CET')
         }
 
+@app.route('/api/force-weekly')
+def force_weekly():
+    """Forza l'invio del REPORT SETTIMANALE RICCO per test"""
+    try:
+        # Resetta il flag per permettere l'invio
+        GLOBAL_FLAGS["weekly_report_sent"] = False
+        save_daily_flags()
+        
+        print("🚀 [FORCE-WEEKLY] Invio forzato del report settimanale ricco...")
+        
+        # Forza l'invio del report RICCO
+        result = genera_report_settimanale()
+        
+        return {
+            "status": "success",
+            "message": "Weekly report RICCO forzato - Include ML, indicatori tecnici, dati live globali",
+            "result": result,
+            "functions_called": "genera_report_settimanale() -> generate_weekly_backtest_summary() [FULL ADVANCED]",
+            "timestamp": datetime.datetime.now(pytz.timezone('Europe/Rome')).strftime('%Y-%m-%d %H:%M:%S CET')
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": str(e),
+            "timestamp": datetime.datetime.now(pytz.timezone('Europe/Rome')).strftime('%Y-%m-%d %H:%M:%S CET')
+        }
+
+@app.route('/api/force-monthly')
+def force_monthly():
+    """Forza l'invio del REPORT MENSILE RICCO per test"""
+    try:
+        # Resetta il flag per permettere l'invio
+        GLOBAL_FLAGS["monthly_report_sent"] = False
+        save_daily_flags()
+        
+        print("🚀 [FORCE-MONTHLY] Invio forzato del report mensile ricco...")
+        
+        # Forza l'invio del report RICCO
+        result = genera_report_mensile()
+        
+        return {
+            "status": "success",
+            "message": "Monthly report RICCO forzato - Include performance, risk metrics, sector rotation, ML",
+            "result": result,
+            "functions_called": "genera_report_mensile() -> generate_monthly_backtest_summary() [FULL ADVANCED]",
+            "timestamp": datetime.datetime.now(pytz.timezone('Europe/Rome')).strftime('%Y-%m-%d %H:%M:%S CET')
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": str(e),
+            "timestamp": datetime.datetime.now(pytz.timezone('Europe/Rome')).strftime('%Y-%m-%d %H:%M:%S CET')
+        }
+
 @app.route('/api/test-scheduler')
 def test_scheduler():
     """Test manuale dello scheduler"""
@@ -4773,28 +5006,108 @@ def get_em_fx_and_commodities():
     return lines
 
 def build_calendar_lines(days=7):
-    """Ritorna una lista di righe calendario eventi per i prossimi N giorni."""
+    """Ritorna una lista di righe calendario eventi per i prossimi N giorni.
+    Versione migliorata con gestione errori robusta e fallback.
+    """
     lines = []
     try:
         oggi = datetime.date.today()
         entro = oggi + datetime.timedelta(days=days)
         lines.append("🗓️ *CALENDARIO EVENTI (7 giorni)*")
         elenco = []
+        
+        # Verifica che la variabile eventi esista e sia valida
+        if 'eventi' not in globals() or not isinstance(eventi, dict):
+            print("⚠️ [CALENDAR] Variabile eventi non trovata o non valida")
+            raise Exception("Eventi non disponibili")
+        
+        # Processo ogni categoria con gestione errori individuale
         for categoria, lista in eventi.items():
-            for e in lista:
-                d = datetime.datetime.strptime(e["Data"], "%Y-%m-%d").date()
-                if oggi <= d <= entro:
-                    elenco.append((d, categoria, e))
-        elenco.sort(key=lambda x: x[0])
+            try:
+                if not isinstance(lista, list):
+                    print(f"⚠️ [CALENDAR] Lista eventi per {categoria} non valida")
+                    continue
+                    
+                for e in lista:
+                    try:
+                        # Verifica che l'evento abbia i campi necessari
+                        if not isinstance(e, dict) or "Data" not in e or "Titolo" not in e:
+                            print(f"⚠️ [CALENDAR] Evento malformato in {categoria}")
+                            continue
+                            
+                        # Parsing della data con gestione errori
+                        try:
+                            d = datetime.datetime.strptime(e["Data"], "%Y-%m-%d").date()
+                        except ValueError as ve:
+                            print(f"⚠️ [CALENDAR] Formato data non valido: {e.get('Data', 'N/A')} - {ve}")
+                            continue
+                            
+                        # Verifica che la data sia nel range
+                        if oggi <= d <= entro:
+                            elenco.append((d, categoria, e))
+                    except Exception as ee:
+                        print(f"⚠️ [CALENDAR] Errore processando evento in {categoria}: {ee}")
+                        continue
+            except Exception as ce:
+                print(f"⚠️ [CALENDAR] Errore processando categoria {categoria}: {ce}")
+                continue
+        
+        # Ordina gli eventi per data
+        try:
+            elenco.sort(key=lambda x: x[0])
+        except Exception as se:
+            print(f"⚠️ [CALENDAR] Errore ordinamento eventi: {se}")
+        
+        # Genera l'output
         if not elenco:
             lines.append("• Nessun evento in finestra 7 giorni")
-        for d, categoria, e in elenco[:20]:
-            ic = "🔴" if e["Impatto"]=="Alto" else "🟡" if e["Impatto"]=="Medio" else "🟢"
-            lines.append(f"{d.strftime('%d/%m')} {ic} {e['Titolo']} — {categoria} · {e['Fonte']}")
+        else:
+            # Limita a massimo 20 eventi e gestisci errori di formattazione
+            for i, (d, categoria, e) in enumerate(elenco[:20]):
+                try:
+                    # Gestione robusta dell'impatto con fallback
+                    impatto = e.get("Impatto", "Basso")
+                    if impatto == "Alto":
+                        ic = "🔴"
+                    elif impatto == "Medio":
+                        ic = "🟡"
+                    else:
+                        ic = "🟢"
+                    
+                    # Formattazione sicura
+                    titolo = str(e.get('Titolo', 'Evento senza titolo'))[:100]  # Limita lunghezza
+                    fonte = str(e.get('Fonte', 'N/A'))[:30]  # Limita lunghezza
+                    
+                    line = f"{d.strftime('%d/%m')} {ic} {titolo} — {categoria} · {fonte}"
+                    lines.append(line)
+                except Exception as fe:
+                    print(f"⚠️ [CALENDAR] Errore formattazione evento {i}: {fe}")
+                    # Aggiungi un evento fallback
+                    lines.append(f"{d.strftime('%d/%m') if 'd' in locals() else '??/??'} 🟢 Evento calendario — {categoria}")
+                    continue
+        
         lines.append("")
-    except Exception:
-        lines.append("⚠️ Calendario non disponibile al momento.")
-        lines.append("")
+        
+    except Exception as main_e:
+        print(f"❌ [CALENDAR] Errore principale in build_calendar_lines: {main_e}")
+        # Fallback completo con eventi simulati
+        lines = [
+            "🗓️ *CALENDARIO EVENTI (7 giorni)*",
+            "• Sistema calendario temporaneamente non disponibile",
+            "• Monitorare: Fed, BCE, CPI, NFP, PMI",
+            "• Check: Earnings tech, geopolitica, crypto events",
+            "• Prossimo update: weekly summary",
+            ""
+        ]
+    
+    # Assicura che la funzione restituisca sempre qualcosa
+    if not lines:
+        lines = [
+            "🗓️ *CALENDARIO EVENTI*",
+            "• Calendario in caricamento...",
+            ""
+        ]
+    
     return lines
 
 
@@ -4885,16 +5198,27 @@ def run_recovery_checks():
         ("evening", GLOBAL_FLAGS.get("evening_report_sent", False), "20:10", 10, "23:50", lambda: safe_send("evening_report_sent","evening_report_last_run", generate_evening_report, after_set_flag_name="evening_report")),
     ]
     
-    # WEEKLY RECOVERY - Solo domenica
-    if now.weekday() == 6:  # Domenica
+    # WEEKLY RECOVERY - Domenica + Lunedì-Martedì per recovery esteso
+    if now.weekday() == 6:  # Domenica - invio normale
         schedules.append(
             ("weekly", GLOBAL_FLAGS.get("weekly_report_sent", False), "18:00", 15, "23:00", lambda: safe_send("weekly_report_sent","weekly_report_last_run", genera_report_settimanale, after_set_flag_name="weekly_report"))
         )
+    elif now.weekday() in [0, 1]:  # Lunedì o Martedì - recovery esteso
+        # Recovery esteso per report settimanale mancato domenica
+        schedules.append(
+            ("weekly_recovery", GLOBAL_FLAGS.get("weekly_report_sent", False), "12:00", 60, "23:00", lambda: safe_send("weekly_report_sent","weekly_report_last_run", genera_report_settimanale, after_set_flag_name="weekly_report"))
+        )
     
-    # MONTHLY RECOVERY - Solo ultimo giorno del mese
+    # MONTHLY RECOVERY - Ultimo giorno del mese + primi 2 giorni del successivo
     if is_last_day_of_month(now):
+        # Invio normale ultimo giorno del mese
         schedules.append(
             ("monthly", GLOBAL_FLAGS.get("monthly_report_sent", False), "19:00", 30, "23:00", lambda: safe_send("monthly_report_sent","monthly_report_last_run", genera_report_mensile, after_set_flag_name="monthly_report"))
+        )
+    elif now.day in [1, 2]:  # Primi 2 giorni del mese - recovery esteso
+        # Recovery esteso per report mensile mancato ultimo giorno del mese precedente
+        schedules.append(
+            ("monthly_recovery", GLOBAL_FLAGS.get("monthly_report_sent", False), "14:00", 90, "23:00", lambda: safe_send("monthly_report_sent","monthly_report_last_run", genera_report_mensile, after_set_flag_name="monthly_report"))
         )
     for key, sent, sched, grace, cutoff, sender in schedules:
         if should_recover(sent, sched, grace, cutoff, now_hhmm):
