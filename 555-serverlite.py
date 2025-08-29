@@ -5310,6 +5310,335 @@ def generate_rassegna_calendar_part2():
         print(f"❌ [RASSEGNA-CALENDAR] Errore nella generazione Parte 2: {e}")
         return "❌ Errore nella generazione Rassegna Calendar Parte 2"
 
+# === FUNZIONI WEEKEND MODE ===
+def generate_weekend_morning_update():
+    """WEEKEND MORNING UPDATE - Versione adattata per weekend (08:10)"""
+    try:
+        italy_tz = pytz.timezone('Europe/Rome')
+        now = datetime.datetime.now(italy_tz)
+        
+        print(f"🌅 [WEEKEND-MORNING] Generazione Weekend Morning Update - {now.strftime('%H:%M:%S')}")
+        
+        parts = []
+        parts.append("🌅 *WEEKEND MORNING UPDATE*")
+        parts.append(f"📅 {now.strftime('%d/%m/%Y %H:%M')} CET • Weekend Edition")
+        
+        # Mostra stato mercati weekend
+        market_status = get_market_status_message()
+        parts.append(market_status)
+        parts.append("─" * 40)
+        parts.append("")
+        
+        # === CRYPTO 24/7 (sempre attivi anche weekend) ===
+        parts.append("₿ *CRYPTO MARKETS* (24/7 Always Active)")
+        parts.append("")
+        try:
+            crypto_prices = get_live_crypto_prices()
+            if crypto_prices:
+                for asset_name in ['BTC', 'ETH', 'BNB', 'SOL']:
+                    if asset_name in crypto_prices:
+                        data = crypto_prices[asset_name]
+                        line = format_crypto_price_line(asset_name, data, "Weekend trading momentum")
+                        parts.append(line)
+                
+                total_cap = crypto_prices.get('TOTAL_MARKET_CAP', 0)
+                if total_cap > 0:
+                    cap_t = total_cap / 1e12
+                    parts.append(f"• Total Cap: ${cap_t:.2f}T - Weekend liquidity tracking")
+            else:
+                parts.append("• Crypto: Dati weekend non disponibili")
+        except Exception as e:
+            print(f"❌ [WEEKEND-MORNING] Errore crypto: {e}")
+            parts.append("• Crypto: Analisi weekend in corso")
+        
+        parts.append("")
+        
+        # === FUTURES E PREPARAZIONE LUNEDI ===
+        parts.append("📈 *FUTURES & MONDAY PREP*")
+        parts.append("")
+        parts.append("⏰ **Timeline Weekend:**")
+        parts.append("• Mercati tradizionali: CHIUSI fino lunedì 09:00")
+        parts.append("• Crypto: Trading 24/7 continuo")
+        parts.append("• Asia: Apertura domenica sera (01:00 CET)")
+        parts.append("")
+        
+        # === NEWS WEEKEND CRITICHE ===
+        try:
+            notizie_critiche = get_notizie_critiche()
+            if notizie_critiche:
+                parts.append("🚨 *WEEKEND NEWS WATCH*")
+                parts.append("")
+                
+                for i, notizia in enumerate(notizie_critiche[:3], 1):
+                    titolo_breve = notizia["titolo"][:70] + "..." if len(notizia["titolo"]) > 70 else notizia["titolo"]
+                    parts.append(f"📰 **{i}.** *{titolo_breve}*")
+                    parts.append(f"📂 {notizia['categoria']} • {notizia['fonte']}")
+                    parts.append("")
+        except Exception:
+            pass
+        
+        # === OUTLOOK WEEKEND ===
+        parts.append("🔮 *WEEKEND OUTLOOK*")
+        parts.append("")
+        parts.append("📊 **Focus Weekend:**")
+        parts.append("• Monitor notizie geopolitiche e macro")
+        parts.append("• Crypto volatility possibile (thin liquidity)")
+        parts.append("• Preparazione gap Monday sui mercati tradizionali")
+        parts.append("")
+        
+        parts.append("🔮 *Prossimi aggiornamenti:*")
+        parts.append("• 🍽️ Weekend Lunch Pulse: 14:10")
+        parts.append("• 🌆 Weekend Evening Wrap: 20:10")
+        if now.weekday() == 5:  # Se è sabato
+            parts.append("• 📊 Weekly Report: Domani 18:00")
+        parts.append("")
+        
+        parts.append("─" * 35)
+        parts.append("🤖 555 Lite • Weekend Mode")
+        
+        msg = "\n".join(parts)
+        success = invia_messaggio_telegram(msg)
+        
+        if success:
+            print("✅ [WEEKEND-MORNING] Weekend Morning Update inviato")
+            return "✅ Weekend Morning Update inviato"
+        else:
+            print("❌ [WEEKEND-MORNING] Weekend Morning Update fallito")
+            return "❌ Errore invio Weekend Morning Update"
+            
+    except Exception as e:
+        print(f"❌ [WEEKEND-MORNING] Errore nella generazione: {e}")
+        return "❌ Errore nella generazione Weekend Morning Update"
+
+def generate_weekend_lunch_pulse():
+    """WEEKEND LUNCH PULSE - Versione adattata per weekend (14:10)"""
+    try:
+        italy_tz = pytz.timezone('Europe/Rome')
+        now = datetime.datetime.now(italy_tz)
+        
+        print(f"🍽️ [WEEKEND-LUNCH] Generazione Weekend Lunch Pulse - {now.strftime('%H:%M:%S')}")
+        
+        parts = []
+        parts.append("🍽️ *WEEKEND LUNCH PULSE*")
+        parts.append(f"📅 {now.strftime('%d/%m/%Y %H:%M')} CET • Weekend Edition")
+        
+        # Mostra stato mercati weekend
+        market_status = get_market_status_message()
+        parts.append(market_status)
+        parts.append("─" * 40)
+        parts.append("")
+        
+        # === CRYPTO PULSE WEEKEND ===
+        parts.append("₿ *CRYPTO WEEKEND PULSE*")
+        parts.append("")
+        try:
+            crypto_prices = get_live_crypto_prices()
+            if crypto_prices:
+                # Bitcoin dominance weekend
+                btc_data = crypto_prices.get('BTC', {})
+                if btc_data.get('price', 0) > 0:
+                    parts.append(format_crypto_price_line('BTC', btc_data, 'Weekend consolidation phase'))
+                
+                eth_data = crypto_prices.get('ETH', {})
+                if eth_data.get('price', 0) > 0:
+                    parts.append(format_crypto_price_line('ETH', eth_data, 'DeFi weekend activity'))
+                
+                # Market cap
+                total_cap = crypto_prices.get('TOTAL_MARKET_CAP', 0)
+                if total_cap > 0:
+                    cap_t = total_cap / 1e12
+                    parts.append(f"• Total Cap: ${cap_t:.2f}T - Weekend liquidity dynamics")
+            else:
+                parts.append("• Crypto: Weekend analysis in corso")
+        except Exception as e:
+            print(f"❌ [WEEKEND-LUNCH] Errore crypto: {e}")
+            parts.append("• Crypto: Weekend data recovery")
+        
+        parts.append("")
+        
+        # === WEEKEND NEWS UPDATE ===
+        try:
+            notizie_critiche = get_notizie_critiche()
+            if notizie_critiche:
+                parts.append("📰 *WEEKEND NEWS UPDATE*")
+                parts.append("")
+                
+                for i, notizia in enumerate(notizie_critiche[:4], 1):
+                    titolo_breve = notizia["titolo"][:68] + "..." if len(notizia["titolo"]) > 68 else notizia["titolo"]
+                    parts.append(f"📈 **{i}.** *{titolo_breve}*")
+                    parts.append(f"📂 {notizia['categoria']} • 📰 {notizia['fonte']}")
+                    parts.append("")
+        except Exception:
+            pass
+        
+        # === MONDAY PREP ===
+        parts.append("📋 *MONDAY PREPARATION*")
+        parts.append("")
+        parts.append("🗓️ **Eventi Lunedì:**")
+        parts.append("• 09:00: Apertura mercati europei")
+        parts.append("• 15:30: Wall Street opening")
+        parts.append("• Watch: Gap fills e momentum weekend")
+        parts.append("")
+        
+        parts.append("📊 **Settori da Monitorare Lunedì:**")
+        parts.append("• Tech: Follow-through post-earnings")
+        parts.append("• Energy: Oil geopolitics weekend")
+        parts.append("• Banks: Rate expectations update")
+        parts.append("")
+        
+        parts.append("🔮 *Prossimi aggiornamenti weekend:*")
+        parts.append("• 🌆 Weekend Evening Wrap: 20:10")
+        if now.weekday() == 5:  # Se è sabato
+            parts.append("• 📊 Weekly Report: Domani 18:00")
+        parts.append("")
+        
+        parts.append("─" * 35)
+        parts.append("🤖 555 Lite • Weekend Pulse")
+        
+        msg = "\n".join(parts)
+        success = invia_messaggio_telegram(msg)
+        
+        if success:
+            print("✅ [WEEKEND-LUNCH] Weekend Lunch Pulse inviato")
+            return "✅ Weekend Lunch Pulse inviato"
+        else:
+            print("❌ [WEEKEND-LUNCH] Weekend Lunch Pulse fallito")
+            return "❌ Errore invio Weekend Lunch Pulse"
+            
+    except Exception as e:
+        print(f"❌ [WEEKEND-LUNCH] Errore nella generazione: {e}")
+        return "❌ Errore nella generazione Weekend Lunch Pulse"
+
+def generate_weekend_evening_wrap():
+    """WEEKEND EVENING WRAP - Versione adattata per weekend (20:10)"""
+    try:
+        italy_tz = pytz.timezone('Europe/Rome')
+        now = datetime.datetime.now(italy_tz)
+        
+        print(f"🌆 [WEEKEND-EVENING] Generazione Weekend Evening Wrap - {now.strftime('%H:%M:%S')}")
+        
+        parts = []
+        parts.append("🌆 *WEEKEND EVENING WRAP*")
+        parts.append(f"📅 {now.strftime('%d/%m/%Y %H:%M')} CET • Weekend Edition")
+        
+        # Mostra stato mercati weekend
+        market_status = get_market_status_message()
+        parts.append(market_status)
+        parts.append("─" * 40)
+        parts.append("")
+        
+        # === WEEKEND RECAP ===
+        parts.append("📊 *WEEKEND RECAP*")
+        parts.append("")
+        parts.append("💼 **Mercati Tradizionali:**")
+        parts.append("• Wall Street: Chiuso da venerdì sera")
+        parts.append("• Europa: Chiuso da venerdì sera")
+        parts.append("• Asia: Chiuso da venerdì (riapertura domenica sera)")
+        parts.append("")
+        
+        # === CRYPTO WEEKEND PERFORMANCE ===
+        parts.append("₿ *CRYPTO WEEKEND PERFORMANCE*")
+        parts.append("")
+        try:
+            crypto_prices = get_live_crypto_prices()
+            if crypto_prices:
+                # Weekend crypto summary
+                for asset_name in ['BTC', 'ETH', 'BNB', 'SOL', 'ADA']:
+                    if asset_name in crypto_prices:
+                        data = crypto_prices[asset_name]
+                        line = format_crypto_price_line(asset_name, data, "Weekend session activity")
+                        parts.append(line)
+                
+                total_cap = crypto_prices.get('TOTAL_MARKET_CAP', 0)
+                if total_cap > 0:
+                    cap_t = total_cap / 1e12
+                    parts.append(f"• Total Cap: ${cap_t:.2f}T - Weekend market cap tracking")
+            else:
+                parts.append("• Crypto: Weekend data processing")
+        except Exception as e:
+            print(f"❌ [WEEKEND-EVENING] Errore crypto: {e}")
+            parts.append("• Crypto: Weekend analysis in progress")
+        
+        parts.append("")
+        
+        # === WEEKEND NEWS SUMMARY ===
+        try:
+            notizie_critiche = get_notizie_critiche()
+            if notizie_critiche:
+                parts.append("📰 *WEEKEND NEWS SUMMARY*")
+                parts.append("")
+                
+                for i, notizia in enumerate(notizie_critiche[:3], 1):
+                    titolo_breve = notizia["titolo"][:70] + "..." if len(notizia["titolo"]) > 70 else notizia["titolo"]
+                    parts.append(f"📈 **{i}.** *{titolo_breve}*")
+                    parts.append(f"📂 {notizia['categoria']} • 📰 {notizia['fonte']}")
+                    parts.append("")
+        except Exception:
+            pass
+        
+        # === MONDAY OUTLOOK ===
+        parts.append("🔮 *MONDAY OUTLOOK*")
+        parts.append("")
+        
+        lunedi = now + datetime.timedelta(days=(7 - now.weekday()) % 7 + 1) if now.weekday() != 0 else now + datetime.timedelta(days=1)
+        parts.append(f"📅 **Timeline Lunedì {lunedi.strftime('%d/%m')}:**")
+        parts.append("• 01:00: Asia opening (Tokyo, Sydney)")
+        parts.append("• 09:00: Europa opening bell")
+        parts.append("• 15:30: Wall Street opening")
+        parts.append("• Watch: Weekend gap analysis")
+        parts.append("")
+        
+        parts.append("📊 **Focus Settoriali Lunedì:**")
+        parts.append("• Tech: Weekend sentiment + earnings follow-up")
+        parts.append("• Energy: Geopolitical developments weekend")
+        parts.append("• Banks: Rate environment positioning")
+        parts.append("• Crypto: Institutional flows Monday")
+        parts.append("")
+        
+        parts.append("💡 **Strategy Weekend → Monday:**")
+        parts.append("• Monitor overnight crypto for momentum clues")
+        parts.append("• Prepare gap trading strategies")
+        parts.append("• Watch geopolitical developments")
+        parts.append("• Cash position for Monday opportunities")
+        parts.append("")
+        
+        # === RIEPILOGO WEEKEND ===
+        parts.append("📋 *WEEKEND WRAP SUMMARY*")
+        parts.append(f"₿ Crypto markets mantengono attività 24/7")
+        parts.append(f"📰 News monitoring attivo per sviluppi critici")
+        parts.append(f"🔮 Preparazione analisi gap Monday")
+        parts.append("")
+        
+        parts.append("🌅 *Prossimi aggiornamenti:*")
+        
+        if now.weekday() == 5:  # Se è sabato
+            parts.append("• 📊 Weekly Report: Domani 18:00")
+            parts.append("• 🌅 Weekend Morning: Domani 08:10")
+        else:  # Se è domenica
+            parts.append("• 🗞️ Rassegna Stampa: Lunedì 07:00")
+            parts.append("• 🌅 Morning Brief: Lunedì 08:10")
+        
+        parts.append("")
+        
+        # Footer
+        parts.append("─" * 35)
+        parts.append(f"🤖 Sistema 555 Lite - {now.strftime('%H:%M')} CET")
+        parts.append("🌙 Buon weekend! Weekend mode active")
+        
+        msg = "\n".join(parts)
+        success = invia_messaggio_telegram(msg)
+        
+        if success:
+            print("✅ [WEEKEND-EVENING] Weekend Evening Wrap inviato")
+            return "✅ Weekend Evening Wrap inviato"
+        else:
+            print("❌ [WEEKEND-EVENING] Weekend Evening Wrap fallito")
+            return "❌ Errore invio Weekend Evening Wrap"
+            
+    except Exception as e:
+        print(f"❌ [WEEKEND-EVENING] Errore nella generazione: {e}")
+        return "❌ Errore nella generazione Weekend Evening Wrap"
+
 # === WRAPPER FUNCTIONS FOR COMPATIBILITY ===
 def generate_rassegna_stampa():
     """Wrapper per rassegna stampa - chiama generate_morning_news_briefing"""
@@ -5834,14 +6163,17 @@ def _recovery_tick():
             log.warning(f"[RECOVERY] evening: {e}")
 
 def check_and_send_scheduled_messages():
-    """Scheduler per-minuto con debounce + recovery tick"""
+    """Scheduler per-minuto con debounce + recovery tick - SEMPRE ATTIVO anche weekend"""
     now = _now_it()
     current_time = now.strftime("%H:%M")
     now_key = _minute_key(now)
-
-    # RASSEGNA NEWS 07:00 (3-4 messaggi) - PARTE 1
+    
+    # Controllo stato mercati per adattare messaggi
+    is_weekend, market_reason = is_weekend_or_holiday()
+    
+    # RASSEGNA NEWS 07:00 - SEMPRE (anche weekend con adattamenti)
     if current_time == SCHEDULE["rassegna_news"] and not GLOBAL_FLAGS.get("rassegna_news_sent", False) and LAST_RUN.get("rassegna_news") != now_key:
-        print("📰 [SCHEDULER] Avvio rassegna NEWS (parte 1)...")
+        print(f"📰 [SCHEDULER] Avvio rassegna NEWS ({'Weekend Mode' if is_weekend else 'Market Mode'})...")
         try:
             LAST_RUN["rassegna_news"] = now_key
             generate_rassegna_news_part1()
@@ -5850,9 +6182,9 @@ def check_and_send_scheduled_messages():
         except Exception as e:
             print(f"❌ [SCHEDULER] Errore rassegna news: {e}")
 
-    # RASSEGNA CALENDAR 07:05 (2-3 messaggi) - PARTE 2  
+    # RASSEGNA CALENDAR 07:05 - SEMPRE (anche weekend)
     if current_time == SCHEDULE["rassegna_calendar"] and not GLOBAL_FLAGS.get("rassegna_calendar_sent", False) and LAST_RUN.get("rassegna_calendar") != now_key:
-        print("📅 [SCHEDULER] Avvio rassegna CALENDARIO (parte 2)...")
+        print(f"📅 [SCHEDULER] Avvio rassegna CALENDARIO ({'Weekend Mode' if is_weekend else 'Market Mode'})...")
         try:
             LAST_RUN["rassegna_calendar"] = now_key
             generate_rassegna_calendar_part2()
@@ -5861,9 +6193,9 @@ def check_and_send_scheduled_messages():
         except Exception as e:
             print(f"❌ [SCHEDULER] Errore rassegna calendario: {e}")
 
-    # AUTO-EXPORT CSV 07:05 (5 minuti dopo rassegna)
+    # AUTO-EXPORT CSV 07:05 - SEMPRE
     if current_time == "07:05" and LAST_RUN.get("auto_export") != now_key:
-        print("📤 [SCHEDULER] Avvio export automatico CSV post-rassegna...")
+        print("📤 [SCHEDULER] Avvio export automatico CSV...")
         try:
             LAST_RUN["auto_export"] = now_key
             auto_export_morning_data()
@@ -5871,34 +6203,43 @@ def check_and_send_scheduled_messages():
         except Exception as e:
             print(f"❌ [SCHEDULER] Errore export automatico: {e}")
 
-    # MORNING 08:10
+    # MORNING 08:10 - SEMPRE (weekend mode adattato)
     if current_time == SCHEDULE["morning"] and not is_message_sent_today("morning_news") and LAST_RUN.get("morning") != now_key:
-        print("🌅 [SCHEDULER] Avvio morning brief...")
+        print(f"🌅 [SCHEDULER] Avvio morning ({'Weekend Update' if is_weekend else 'Market Brief'})...")
         try:
             LAST_RUN["morning"] = now_key
-            generate_morning_news()
+            if is_weekend:
+                generate_weekend_morning_update()
+            else:
+                generate_morning_news()
             set_message_sent_flag("morning_news"); 
             save_daily_flags()
         except Exception as e:
             print(f"❌ [SCHEDULER] Errore morning: {e}")
 
-    # LUNCH 14:10
+    # LUNCH 14:10 - SEMPRE (weekend mode adattato)
     if current_time == SCHEDULE["lunch"] and not is_message_sent_today("daily_report") and LAST_RUN.get("lunch") != now_key:
-        print("🍽️ [SCHEDULER] Avvio lunch brief...")
+        print(f"🍽️ [SCHEDULER] Avvio lunch ({'Weekend Pulse' if is_weekend else 'Market Report'})...")
         try:
             LAST_RUN["lunch"] = now_key
-            generate_lunch_report()
+            if is_weekend:
+                generate_weekend_lunch_pulse()
+            else:
+                generate_lunch_report()
             set_message_sent_flag("daily_report"); 
             save_daily_flags()
         except Exception as e:
             print(f"❌ [SCHEDULER] Errore lunch: {e}")
 
-    # EVENING 20:10
+    # EVENING 20:10 - SEMPRE (weekend mode adattato)
     if current_time == SCHEDULE["evening"] and not is_message_sent_today("evening_report") and LAST_RUN.get("evening") != now_key:
-        print("🌆 [SCHEDULER] Avvio evening brief...")
+        print(f"🌆 [SCHEDULER] Avvio evening ({'Weekend Wrap' if is_weekend else 'Market Wrap'})...")
         try:
             LAST_RUN["evening"] = now_key
-            generate_evening_report()
+            if is_weekend:
+                generate_weekend_evening_wrap()
+            else:
+                generate_evening_report()
             set_message_sent_flag("evening_report"); 
             save_daily_flags()
         except Exception as e:
