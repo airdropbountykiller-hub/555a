@@ -5,7 +5,8 @@ import feedparser
 import threading
 import os
 import pytz
-import pandas as pd
+import pytz
+import pandas
 import gc
 import json
 from xgboost import XGBClassifier
@@ -41,22 +42,58 @@ def _minute_key(dt=None):
     if dt is None: dt = _now_it()
     return dt.strftime("%Y%m%d%H%M")
 
+# === CONTROLLI MERCATO E WEEKEND ===
+def is_weekend():
+    """Controlla se oggi è weekend (sabato=5, domenica=6)"""
+    today = _now_it().weekday()
+    return today >= 5  # sabato=5, domenica=6
+
+def is_market_hours():
+    """Controlla se siamo negli orari di mercato (lun-ven 9:00-17:30 CET)"""
+    now = _now_it()
+    
+    # Weekend = mercati chiusi
+    if is_weekend():
+        return False
+    
+    # Orario mercati europei: 9:00-17:30
+    market_open = now.replace(hour=9, minute=0, second=0, microsecond=0)
+    market_close = now.replace(hour=17, minute=30, second=0, microsecond=0)
+    
+    return market_open <= now <= market_close
+
+def get_market_status():
+    """Restituisce lo stato dei mercati"""
+    if is_weekend():
+        now = _now_it()
+        if now.weekday() == 5:  # Sabato
+            return "WEEKEND_SAB", "Weekend - Mercati chiusi (riaprono lunedì)"
+        else:  # Domenica
+            return "WEEKEND_DOM", "Weekend - Mercati chiusi (riaprono domani)"
+    
+    if is_market_hours():
+        return "OPEN", "Mercati aperti"
+    else:
+        now = _now_it()
+        if now.hour < 9:
+            return "PRE_MARKET", "Pre-market - Mercati chiusi"
+        else:
+            return "AFTER_MARKET", "After-market - Mercati chiusi"
+
 from flask import Flask, request
 
 app = Flask(__name__)
 
 # === 555-LITE SCHEDULE (patched) ===
-# 🆕 RASSEGNA DIVISA: 07:00 Notizie+ML | 07:05 Calendario+ML
 SCHEDULE = {
-    "rassegna_news": "07:00",    # 📰 Notizie + ML Notizie
-    "rassegna_calendar": "07:05", # 📅 Calendario + ML Calendario  
-    "rassegna": "07:00",          # 🔧 COMPATIBILITÀ - Alias per recovery
+    "rassegna": "07:00",
     "morning":  "08:10",
     "lunch":    "14:10",
     "evening":  "20:10",
 }
 RECOVERY_INTERVAL_MINUTES = 10
-RECOVERY_WINDOWS = {"rassegna_news": 30, "rassegna_calendar": 30, "rassegna": 30, "morning": 30, "lunch": 30, "evening": 30}
+RECOVERY_WINDOWS = {"rassegna": 60, "morning": 80, "lunch": 80, "evening": 80}
+ITALY_TZ = pytz.timezone("Europe/Rome")
 LAST_RUN = {}  # per-minute debounce
 
 from flask import Flask, jsonify, request
@@ -89,12 +126,13 @@ ensure_directories()
 # === SISTEMA FLAG PERSISTENTI SU FILE ===
 # File per salvare i flag degli invii giornalieri
 FLAGS_FILE = os.path.join('salvataggi', 'daily_flags.json')
+# File per tracciare notizie già inviate (anti-duplicati)
+NEWS_TRACKING_FILE = os.path.join('salvataggi', 'news_tracking.json')
+# File per tracciare titoli rassegna stampa precedenti
+PRESS_REVIEW_HISTORY_FILE = os.path.join('salvataggi', 'press_review_history.json')
 
 # Variabili globali per tracciare invii giornalieri
-# 🆕 RASSEGNA DIVISA: rassegna_news + rassegna_calendar
 GLOBAL_FLAGS = {
-    "rassegna_news_sent": False,      # 🆕 07:00 - Notizie + ML Notizie
-    "rassegna_calendar_sent": False,  # 🆕 07:05 - Calendario + ML Calendario
     "morning_news_sent": False,
     "daily_report_sent": False,
     "evening_report_sent": False,
@@ -188,20 +226,7 @@ def set_message_sent_flag(message_type):
     """Imposta il flag di invio per il tipo di messaggio e salva su file"""
     reset_daily_flags_if_needed()  # Verifica reset automatico
     
-# 🆕 RASSEGNA DIVISA: gestione nuovi flag + ANTI-DUPLICATE FIX
-    if message_type == "rassegna_news":
-        GLOBAL_FLAGS["rassegna_news_sent"] = True
-        print("✅ [FLAGS] Flag rassegna_news_sent impostato su True")
-    elif message_type == "rassegna_calendar":
-        GLOBAL_FLAGS["rassegna_calendar_sent"] = True
-        print("✅ [FLAGS] Flag rassegna_calendar_sent impostato su True")
-    elif message_type == "rassegna" or message_type == "rassegna_stampa":
-        # 🔧 ANTI-DUPLICATE: Sincronizza tutti i flag rassegna
-        GLOBAL_FLAGS["rassegna_news_sent"] = True
-        GLOBAL_FLAGS["rassegna_calendar_sent"] = True
-        GLOBAL_FLAGS["rassegna_stampa_sent"] = True
-        print("✅ [FLAGS] TUTTI i flag rassegna sincronizzati per evitare duplicati")
-    elif message_type == "morning_news":
+    if message_type == "morning_news":
         GLOBAL_FLAGS["morning_news_sent"] = True
         print("✅ [FLAGS] Flag morning_news_sent impostato su True")
     elif message_type == "daily_report":
@@ -233,18 +258,8 @@ def is_message_sent_today(message_type):
     """Verifica se il messaggio è già stato inviato oggi (solo memoria come 555-server)"""
     reset_daily_flags_if_needed()  # Verifica reset automatico
     
-# 🆕 RASSEGNA DIVISA: controllo nuovi flag + ANTI-DUPLICATE FIX
-    if message_type == "rassegna_news":
-        return GLOBAL_FLAGS["rassegna_news_sent"]
-    elif message_type == "rassegna_calendar":
-        return GLOBAL_FLAGS["rassegna_calendar_sent"]
-    elif message_type == "rassegna" or message_type == "rassegna_stampa":
-        # 🔧 ANTI-DUPLICATE: Controlla che TUTTI i flag rassegna siano settati
-        return (GLOBAL_FLAGS.get("rassegna_news_sent", False) or 
-                GLOBAL_FLAGS.get("rassegna_calendar_sent", False) or 
-                GLOBAL_FLAGS.get("rassegna_stampa_sent", False))
-    elif message_type == "morning_news":
-        # 🚨 EMERGENCY FIX: Usa RENDER_EXTERNAL_URL per fermare spam
+    # 🚨 EMERGENCY FIX: Usa RENDER_EXTERNAL_URL per fermare spam
+    if message_type == "morning_news":
         external_url = os.getenv('RENDER_EXTERNAL_URL', '')
         # Se URL contiene 'STOP' o è vuota, ferma i messaggi
         if 'STOP' in external_url.upper() or not external_url:
@@ -541,7 +556,8 @@ models = {
 # === CACHE OTTIMIZZATO PER RENDER LITE ===
 data_cache = {}
 cache_timestamps = {}
-CACHE_DURATION_MINUTES = 30  # Ridotto da 60 per Render
+CACHE_DURATION_MINUTES = 15  # Ridotto per notizie più fresche
+NEWS_CACHE_DURATION_MINUTES = 5  # Cache notizie molto breve
 
 
 def is_cache_valid(cache_key, duration_minutes=CACHE_DURATION_MINUTES):
@@ -887,123 +903,6 @@ def get_all_live_data():
         print(f"❌ [LIVE-ALL] Errore generale: {e}")
         return all_data
 
-def calculate_real_technical_analysis_for_assets():
-    """Calcola analisi tecnica reale per i principali asset usando dati live"""
-    results = {}
-    
-    try:
-        # Asset da analizzare con i loro dati
-        assets_to_analyze = {
-            'Bitcoin': ('crypto', 'BTC'),
-            'S&P 500': ('traditional', 'SPY'), 
-            'Gold': ('traditional', 'GC=F'),
-            'EUR/USD': ('traditional', 'EURUSD=X')
-        }
-        
-        for asset_name, (asset_type, symbol) in assets_to_analyze.items():
-            try:
-                print(f"📊 [TECH-ANALYSIS] Analizzando {asset_name}...")
-                
-                # Recupera dati storici
-                if asset_type == 'crypto':
-                    df = load_crypto_data(symbol, limit=100)  # Ultimi 100 giorni
-                else:
-                    import yfinance as yf
-                    ticker = yf.Ticker(symbol)
-                    df = ticker.history(period="3mo", interval="1d")
-                    if not df.empty:
-                        df = df[['Close']].rename(columns={'Close': 'Close'})
-                
-                if df.empty or len(df) < 30:
-                    print(f"⚠️ [TECH-ANALYSIS] Dati insufficienti per {asset_name}")
-                    continue
-                
-                # Calcola indicatori tecnici reali
-                indicators = calculate_technical_indicators_lite(df)
-                
-                # Analizza segnali attuali
-                signals = {}
-                buy_signals = 0
-                sell_signals = 0
-                hold_signals = 0
-                
-                for ind_name, ind_series in indicators.items():
-                    if not ind_series.empty:
-                        latest_signal = ind_series.iloc[-1]
-                        
-                        if latest_signal == 1:
-                            signal_text = 'BUY'
-                            buy_signals += 1
-                        elif latest_signal == -1:
-                            signal_text = 'SELL'
-                            sell_signals += 1
-                        else:
-                            signal_text = 'HOLD'
-                            hold_signals += 1
-                        
-                        signals[ind_name] = signal_text
-                
-                # Calcola consensus basato su segnali reali
-                total_signals = buy_signals + sell_signals + hold_signals
-                if total_signals > 0:
-                    buy_pct = (buy_signals / total_signals) * 100
-                    sell_pct = (sell_signals / total_signals) * 100
-                    hold_pct = (hold_signals / total_signals) * 100
-                    
-                    # Determina consensus
-                    if buy_pct >= 50:
-                        consensus = 'BUY'
-                        confidence = int(buy_pct)
-                    elif sell_pct >= 50:
-                        consensus = 'SELL'
-                        confidence = int(sell_pct)
-                    else:
-                        consensus = 'HOLD'
-                        confidence = int(max(hold_pct, buy_pct, sell_pct))
-                else:
-                    consensus = 'HOLD'
-                    confidence = 50
-                
-                # Aggiungi prezzo attuale per contesto
-                current_price = float(df['Close'].iloc[-1])
-                price_change_5d = ((current_price / float(df['Close'].iloc[-5])) - 1) * 100 if len(df) >= 5 else 0
-                
-                results[asset_name] = {
-                    'consensus': consensus,
-                    'confidence': confidence,
-                    'signals': signals,
-                    'current_price': current_price,
-                    'change_5d': price_change_5d,
-                    'total_indicators': total_signals
-                }
-                
-                print(f"✅ [TECH-ANALYSIS] {asset_name}: {consensus} ({confidence}%) - {total_signals} indicatori")
-                
-            except Exception as e:
-                print(f"❌ [TECH-ANALYSIS] Errore analisi {asset_name}: {e}")
-                # Fallback per asset con errore
-                results[asset_name] = {
-                    'consensus': 'HOLD',
-                    'confidence': 50,
-                    'signals': {'ERROR': 'DATI_NON_DISPONIBILI'},
-                    'current_price': 0,
-                    'change_5d': 0,
-                    'total_indicators': 0
-                }
-        
-        print(f"✅ [TECH-ANALYSIS] Completata analisi per {len(results)} asset")
-        return results
-        
-    except Exception as e:
-        print(f"❌ [TECH-ANALYSIS] Errore generale: {e}")
-        # Fallback completo
-        return {
-            'Bitcoin': {'consensus': 'HOLD', 'confidence': 50, 'signals': {}, 'current_price': 0, 'change_5d': 0, 'total_indicators': 0},
-            'S&P 500': {'consensus': 'HOLD', 'confidence': 50, 'signals': {}, 'current_price': 0, 'change_5d': 0, 'total_indicators': 0},
-            'Gold': {'consensus': 'HOLD', 'confidence': 50, 'signals': {}, 'current_price': 0, 'change_5d': 0, 'total_indicators': 0},
-            'EUR/USD': {'consensus': 'HOLD', 'confidence': 50, 'signals': {}, 'current_price': 0, 'change_5d': 0, 'total_indicators': 0}
-        }
-
 # === FUNZIONI HELPER PER FORMATTAZIONE ===
 def format_live_price(asset_name, live_data, description=""):
     """Formatta una linea di prezzo live per i messaggi"""
@@ -1049,156 +948,6 @@ def format_live_price(asset_name, live_data, description=""):
         
     except Exception as e:
         return f"• {asset_name}: Errore formato - {description}"
-
-# === FUNZIONE PER SECTOR ROTATION LIVE ===
-def get_live_sector_rotation_data():
-    """Recupera performance settoriali live tramite ETF settoriali principali"""
-    cache_key = "live_sector_data"
-    
-    # Cache di 10 minuti per dati settoriali
-    if is_cache_valid(cache_key, duration_minutes=10):
-        if cache_key in data_cache:
-            print(f"⚡ [CACHE] Live sector data (hit)")
-            return data_cache[cache_key]
-    
-    sector_data = {}
-    
-    try:
-        print(f"🌐 [SECTOR-LIVE] Recupero dati settoriali live...")
-        
-        import yfinance as yf
-        
-        # Mappa ETF settoriali → Nomi settori
-        sector_etfs = {
-            'XLE': 'Energy',              # Energy Select Sector SPDR Fund
-            'XLF': 'Financials',          # Financial Select Sector SPDR Fund
-            'XLI': 'Industrials',         # Industrial Select Sector SPDR Fund
-            'XLK': 'Technology',          # Technology Select Sector SPDR Fund
-            'XLV': 'Healthcare',          # Health Care Select Sector SPDR Fund
-            'XLP': 'Consumer Staples',    # Consumer Staples Select Sector SPDR Fund
-            'XLY': 'Consumer Discretionary', # Consumer Discretionary Select Sector SPDR Fund
-            'XLU': 'Utilities',           # Utilities Select Sector SPDR Fund
-            'XLB': 'Materials',           # Materials Select Sector SPDR Fund
-            'XLRE': 'Real Estate',        # Real Estate Select Sector SPDR Fund
-            'XLC': 'Communication Services' # Communication Services Select Sector SPDR Fund
-        }
-        
-        # Fetch tutti gli ETF settoriali insieme per efficienza
-        etf_tickers = list(sector_etfs.keys())
-        
-        try:
-            # Download dati per tutti gli ETF
-            sector_stocks = yf.download(etf_tickers, period="2d", interval="1d", group_by="ticker")
-            
-            for etf_ticker, sector_name in sector_etfs.items():
-                try:
-                    if etf_ticker in sector_stocks.columns.get_level_values(0):
-                        etf_data = sector_stocks[etf_ticker]
-                        
-                        if not etf_data.empty and len(etf_data) >= 1:
-                            current_price = float(etf_data['Close'].iloc[-1])
-                            
-                            # Calcola variazione % giornaliera
-                            if len(etf_data) >= 2:
-                                prev_price = float(etf_data['Close'].iloc[-2])
-                                change_pct = ((current_price - prev_price) / prev_price) * 100
-                            else:
-                                change_pct = 0.0
-                            
-                            # Volume se disponibile
-                            volume = float(etf_data['Volume'].iloc[-1]) if 'Volume' in etf_data.columns and not pd.isna(etf_data['Volume'].iloc[-1]) else 0
-                            
-                            sector_data[sector_name] = {
-                                'performance': change_pct,
-                                'price': current_price,
-                                'volume': volume,
-                                'etf_ticker': etf_ticker
-                            }
-                            
-                            print(f"✅ [SECTOR-LIVE] {sector_name}: {change_pct:+.1f}% (via {etf_ticker})")
-                        
-                except Exception as e:
-                    print(f"⚠️ [SECTOR-LIVE] Errore processing {etf_ticker}: {e}")
-                    continue
-            
-            # Se abbiamo dati, calcoliamo ranking
-            if sector_data:
-                # Ordina per performance
-                sorted_sectors = sorted(sector_data.items(), key=lambda x: x[1]['performance'], reverse=True)
-                
-                # Aggiungi ranking
-                for i, (sector_name, data) in enumerate(sorted_sectors):
-                    sector_data[sector_name]['rank'] = i + 1
-                    sector_data[sector_name]['is_top_performer'] = i < 4  # Top 4
-                    sector_data[sector_name]['is_underperformer'] = i >= len(sorted_sectors) - 4  # Bottom 4
-                
-                print(f"✅ [SECTOR-LIVE] Ranking calcolato: {len(sector_data)} settori")
-                
-                # Cache i risultati
-                data_cache[cache_key] = sector_data
-                cache_timestamps[cache_key] = datetime.datetime.now()
-                
-                return sector_data
-            else:
-                print(f"⚠️ [SECTOR-LIVE] Nessun dato settoriale recuperato")
-                return {}
-            
-        except Exception as e:
-            print(f"❌ [SECTOR-LIVE] Errore download ETF: {e}")
-            return {}
-        
-    except ImportError:
-        print(f"⚠️ [SECTOR-LIVE] yfinance non disponibile")
-        return {}
-    except Exception as e:
-        print(f"❌ [SECTOR-LIVE] Errore generale: {e}")
-        return {}
-
-def format_sector_performance_line(sector_name, sector_data, comment=""):
-    """Formatta una linea di performance settoriale per i messaggi"""
-    try:
-        performance = sector_data.get('performance', 0)
-        price = sector_data.get('price', 0)
-        etf_ticker = sector_data.get('etf_ticker', '')
-        
-        # Formatta performance
-        perf_str = f"+{performance:.1f}%" if performance >= 0 else f"{performance:.1f}%"
-        
-        # Emoji basato su performance
-        if performance >= 1.0:
-            emoji = "🟢"  # Verde per performance forte
-        elif performance >= 0:
-            emoji = "🔵"  # Blu per performance positiva moderata
-        elif performance > -1.0:
-            emoji = "🟡"  # Giallo per performance negativa moderata
-        else:
-            emoji = "🔴"  # Rosso per performance debole
-        
-        # Genera commento automatico se non fornito
-        if not comment:
-            if sector_name == 'Energy' and performance > 1:
-                comment = "Oil rally momentum"
-            elif sector_name == 'Financials' and performance > 0.5:
-                comment = "Rate expectations positive"
-            elif sector_name == 'Technology' and performance > 0.5:
-                comment = "AI/semiconductors drive"
-            elif sector_name == 'Healthcare' and abs(performance) < 0.5:
-                comment = "Defensive stability"
-            elif sector_name == 'Utilities' and performance < -0.5:
-                comment = "Rate sensitivity pressure"
-            elif sector_name == 'Real Estate' and performance < -0.5:
-                comment = "REIT duration risk"
-            elif performance >= 1:
-                comment = "Strong momentum"
-            elif performance <= -1:
-                comment = "Under pressure"
-            else:
-                comment = "Mixed performance"
-        
-        return f"• {sector_name}: {perf_str} - {comment}"
-        
-    except Exception as e:
-        return f"• {sector_name}: Errore calcolo performance - {comment}"
 
 # === FUNZIONE PER PREZZI MARKET TRADIZIONALI LIVE ===
 def get_live_market_data():
@@ -1509,70 +1258,555 @@ def signal_text(sig):
     """Converte segnale numerico in testo"""
     return "Buy" if sig == 1 else "Sell" if sig == -1 else "Hold"
 
+# === ANALISI TECNICA REAL-TIME ===
+def calculate_dynamic_support_resistance(price, volatility_pct=2.0):
+    """Calcola support/resistance dinamici basati su prezzo e volatilità"""
+    try:
+        if not price or price <= 0:
+            return None, None
+        
+        # Calcola range basato su volatilità
+        range_size = price * (volatility_pct / 100)
+        
+        support = price - range_size
+        resistance = price + range_size
+        
+        # Arrotonda a livelli "puliti"
+        if price >= 1000:
+            # Per indici: arrotonda a 10
+            support = int(support / 10) * 10
+            resistance = int(resistance / 10) * 10
+        elif price >= 1:
+            # Per FX major: arrotonda a 0.001
+            support = round(support, 3)
+            resistance = round(resistance, 3)
+        else:
+            # Per crypto o small values: arrotonda a 4 decimali
+            support = round(support, 4)
+            resistance = round(resistance, 4)
+        
+        return support, resistance
+    except:
+        return None, None
+
+def get_trend_analysis(price, change_pct):
+    """Analizza il trend basato su prezzo e variazione percentuale"""
+    try:
+        if not price or change_pct is None:
+            return "NEUTRAL", "⚪"
+        
+        abs_change = abs(change_pct)
+        
+        if change_pct >= 2.0:
+            return "STRONG_BULLISH", "🟢"
+        elif change_pct >= 0.5:
+            return "BULLISH", "📈"
+        elif change_pct >= -0.5:
+            return "NEUTRAL", "⚪"
+        elif change_pct >= -2.0:
+            return "BEARISH", "📉"
+        else:
+            return "STRONG_BEARISH", "🔴"
+            
+    except:
+        return "UNKNOWN", "❔"
+
+def calculate_momentum_score(change_pct, volume=None):
+    """Calcola un momentum score da 1-10"""
+    try:
+        if change_pct is None:
+            return 5  # Neutrale
+        
+        # Base score dalla variazione %
+        if change_pct >= 3:
+            base_score = 9
+        elif change_pct >= 1:
+            base_score = 7
+        elif change_pct >= 0:
+            base_score = 6
+        elif change_pct >= -1:
+            base_score = 4
+        elif change_pct >= -3:
+            base_score = 2
+        else:
+            base_score = 1
+        
+        # Aggiusta per volume se disponibile
+        if volume and volume > 0:
+            # Se volume alto, aumenta confidence
+            if volume > 1000000:  # Volume alto
+                base_score = min(10, base_score + 1)
+        
+        return max(1, min(10, base_score))
+    except:
+        return 5
+
+# === SECTOR ROTATION ANALYSIS ===
+def analyze_live_sector_rotation(all_live_data):
+    """Analizza la rotazione settoriale in tempo reale"""
+    try:
+        # Settori simulati basati sui dati disponibili
+        sector_analysis = {
+            "top_performers": [],
+            "underperformers": [],
+            "sector_summary": ""
+        }
+        
+        # Analizza indices per dedurre performance settoriali
+        indices_data = all_live_data.get('indices', {})
+        stocks_data = all_live_data.get('stocks', {})
+        
+        # Combina tutti i dati disponibili
+        all_assets = {**indices_data, **stocks_data}
+        
+        if not all_assets:
+            return {
+                "top_performers": [("Energy", "+1.5%", "Oil momentum")],
+                "underperformers": [("Utilities", "-0.5%", "Defensive rotation")],
+                "sector_summary": "Sector data loading - mixed rotation expected"
+            }
+        
+        # Calcola performance media
+        performances = []
+        for name, data in all_assets.items():
+            change = data.get('change_pct', 0)
+            if change != 0:  # Solo asset con dati validi
+                performances.append((name, change))
+        
+        if performances:
+            # Ordina per performance
+            performances.sort(key=lambda x: x[1], reverse=True)
+            
+            # Top performers (primi 30%)
+            top_count = max(1, len(performances) // 3)
+            top_performers = []
+            for i, (name, perf) in enumerate(performances[:top_count]):
+                # Deduce settore dal nome
+                sector = deduce_sector_from_name(name)
+                top_performers.append((sector, f"{perf:+.1f}%", get_sector_comment(sector, "positive")))
+            
+            # Underperformers (ultimi 30%)
+            under_performers = []
+            for i, (name, perf) in enumerate(performances[-top_count:]):
+                sector = deduce_sector_from_name(name)
+                under_performers.append((sector, f"{perf:+.1f}%", get_sector_comment(sector, "negative")))
+            
+            # Summary
+            avg_performance = sum(p[1] for p in performances) / len(performances)
+            if avg_performance > 0.5:
+                summary = "Risk-on rotation: Growth sectors outperforming"
+            elif avg_performance < -0.5:
+                summary = "Risk-off rotation: Defensive sectors preferred"
+            else:
+                summary = "Mixed rotation: Sector-specific drivers dominating"
+            
+            return {
+                "top_performers": top_performers[:4],  # Max 4
+                "underperformers": under_performers[:4],
+                "sector_summary": summary
+            }
+        
+        # Fallback
+        return {
+            "top_performers": [("Technology", "+1.2%", "AI momentum continues")],
+            "underperformers": [("Real Estate", "-0.8%", "Rate sensitivity")],
+            "sector_summary": "Sector rotation analysis based on limited data"
+        }
+        
+    except Exception as e:
+        print(f"⚠️ [SECTOR] Errore analisi settori: {e}")
+        return {
+            "top_performers": [("Mixed Sectors", "Data loading", "Analysis in progress")],
+            "underperformers": [("Mixed Sectors", "Data loading", "Analysis in progress")],
+            "sector_summary": "Sector rotation data updating..."
+        }
+
+def deduce_sector_from_name(asset_name):
+    """Deduce settore dal nome dell'asset"""
+    name_lower = asset_name.lower()
+    
+    if any(word in name_lower for word in ['tech', 'nasdaq', 'software', 'ai']):
+        return "Technology"
+    elif any(word in name_lower for word in ['bank', 'financial', 'finance']):
+        return "Financials"
+    elif any(word in name_lower for word in ['energy', 'oil', 'gas']):
+        return "Energy"
+    elif any(word in name_lower for word in ['health', 'pharma', 'bio']):
+        return "Healthcare"
+    elif any(word in name_lower for word in ['real estate', 'reit', 'property']):
+        return "Real Estate"
+    elif any(word in name_lower for word in ['utility', 'electric', 'power']):
+        return "Utilities"
+    elif any(word in name_lower for word in ['consumer', 'retail', 'staple']):
+        return "Consumer"
+    elif any(word in name_lower for word in ['industrial', 'manufacturing']):
+        return "Industrials"
+    elif any(word in name_lower for word in ['material', 'mining', 'metal']):
+        return "Materials"
+    else:
+        return "Mixed Sectors"
+
+def get_sector_comment(sector, direction):
+    """Genera commento per settore"""
+    comments = {
+        "Technology": {
+            "positive": "AI and cloud momentum",
+            "negative": "Valuation concerns"
+        },
+        "Energy": {
+            "positive": "Oil rally continues",
+            "negative": "Demand concerns"
+        },
+        "Financials": {
+            "positive": "Rate environment supportive",
+            "negative": "Credit quality concerns"
+        },
+        "Healthcare": {
+            "positive": "Defensive demand",
+            "negative": "Regulatory pressure"
+        },
+        "Real Estate": {
+            "positive": "Recovery signs",
+            "negative": "Rate sensitivity"
+        },
+        "Utilities": {
+            "positive": "Defensive appeal",
+            "negative": "Growth rotation out"
+        }
+    }
+    
+    return comments.get(sector, {}).get(direction, "Mixed dynamics")
+
+# === ENHANCED NEWS ANALYSIS ===
+def get_enhanced_news_analysis():
+    """Analisi notizie potenziata con insights di mercato"""
+    try:
+        # Recupera l'analisi base
+        base_analysis = analyze_news_sentiment_and_impact()
+        
+        if not base_analysis:
+            return None
+        
+        # Aggiungi insights di mercato
+        enhanced_analysis = base_analysis.copy()
+        
+        # Market timing insights
+        market_timing = get_market_timing_insights(base_analysis)
+        enhanced_analysis['market_timing'] = market_timing
+        
+        # Risk assessment
+        risk_assessment = assess_news_risks(base_analysis)
+        enhanced_analysis['risk_assessment'] = risk_assessment
+        
+        # Trading opportunities
+        opportunities = identify_trading_opportunities(base_analysis)
+        enhanced_analysis['opportunities'] = opportunities
+        
+        return enhanced_analysis
+        
+    except Exception as e:
+        print(f"⚠️ [NEWS-ENHANCED] Errore: {e}")
+        return None
+
+def get_market_timing_insights(news_analysis):
+    """Genera insights sui timing di mercato dalle notizie"""
+    try:
+        sentiment = news_analysis.get('sentiment', 'NEUTRAL')
+        impact = news_analysis.get('market_impact', 'MEDIUM')
+        
+        if sentiment == 'POSITIVE' and impact == 'HIGH':
+            return {
+                'signal': 'BULLISH',
+                'timeframe': 'Short-term (1-3 days)',
+                'confidence': 'HIGH',
+                'action': 'Consider long positions on dips'
+            }
+        elif sentiment == 'NEGATIVE' and impact == 'HIGH':
+            return {
+                'signal': 'BEARISH',
+                'timeframe': 'Short-term (1-3 days)',
+                'confidence': 'HIGH',
+                'action': 'Consider defensive positioning'
+            }
+        elif impact == 'HIGH':  # Neutral sentiment but high impact
+            return {
+                'signal': 'VOLATILE',
+                'timeframe': 'Intraday',
+                'confidence': 'MEDIUM',
+                'action': 'Expect increased volatility'
+            }
+        else:
+            return {
+                'signal': 'NEUTRAL',
+                'timeframe': 'Medium-term',
+                'confidence': 'LOW',
+                'action': 'Status quo - monitor developments'
+            }
+            
+    except:
+        return {
+            'signal': 'UNKNOWN',
+            'timeframe': 'Unknown',
+            'confidence': 'LOW',
+            'action': 'Data insufficient for timing'
+        }
+
+def assess_news_risks(news_analysis):
+    """Valuta i rischi dalle notizie"""
+    try:
+        sentiment = news_analysis.get('sentiment', 'NEUTRAL')
+        impact = news_analysis.get('market_impact', 'MEDIUM')
+        analyzed_news = news_analysis.get('analyzed_news', [])
+        
+        risk_factors = []
+        risk_level = 'LOW'
+        
+        # Conta notizie negative ad alto impatto
+        high_impact_negative = 0
+        for news in analyzed_news:
+            if news.get('impact') == 'HIGH' and news.get('sentiment') == 'NEGATIVE':
+                high_impact_negative += 1
+        
+        if high_impact_negative >= 2:
+            risk_level = 'HIGH'
+            risk_factors.append('Multiple high-impact negative news')
+        elif sentiment == 'NEGATIVE' and impact == 'HIGH':
+            risk_level = 'MEDIUM'
+            risk_factors.append('Negative sentiment with high market impact')
+        
+        # Controlla parole chiave rischiose
+        risky_keywords = ['crisis', 'crash', 'war', 'sanctions', 'hack', 'default']
+        for news in analyzed_news[:5]:  # Check top 5 news
+            title = news.get('title', '').lower()
+            for keyword in risky_keywords:
+                if keyword in title:
+                    risk_factors.append(f'Risk keyword detected: {keyword}')
+                    if risk_level == 'LOW':
+                        risk_level = 'MEDIUM'
+        
+        return {
+            'level': risk_level,
+            'factors': risk_factors[:3],  # Max 3 fattori
+            'recommendation': get_risk_recommendation(risk_level)
+        }
+        
+    except:
+        return {
+            'level': 'UNKNOWN',
+            'factors': ['Risk assessment unavailable'],
+            'recommendation': 'Monitor news developments'
+        }
+
+def identify_trading_opportunities(news_analysis):
+    """Identifica opportunità di trading dalle notizie"""
+    try:
+        opportunities = []
+        
+        analyzed_news = news_analysis.get('analyzed_news', [])
+        
+        for news in analyzed_news[:5]:  # Top 5 news
+            title = news.get('title', '').lower()
+            sentiment = news.get('sentiment', 'NEUTRAL')
+            impact = news.get('impact', 'LOW')
+            
+            # Opportunità crypto
+            if any(word in title for word in ['bitcoin', 'crypto', 'btc', 'ethereum']):
+                if sentiment == 'POSITIVE' and impact == 'HIGH':
+                    opportunities.append({
+                        'type': 'CRYPTO_LONG',
+                        'description': 'Crypto rally opportunity',
+                        'timeframe': '1-3 days',
+                        'risk': 'Medium'
+                    })
+                elif sentiment == 'NEGATIVE' and impact == 'HIGH':
+                    opportunities.append({
+                        'type': 'CRYPTO_SHORT',
+                        'description': 'Crypto weakness play',
+                        'timeframe': '1-2 days',
+                        'risk': 'High'
+                    })
+            
+            # Opportunità forex
+            if any(word in title for word in ['fed', 'rate', 'dollar', 'usd']):
+                if 'rate' in title and sentiment == 'POSITIVE':
+                    opportunities.append({
+                        'type': 'USD_STRENGTH',
+                        'description': 'USD strength on rate expectations',
+                        'timeframe': '1-5 days',
+                        'risk': 'Low'
+                    })
+            
+            # Opportunità settoriali
+            if any(word in title for word in ['oil', 'energy']):
+                if sentiment == 'POSITIVE':
+                    opportunities.append({
+                        'type': 'ENERGY_SECTOR',
+                        'description': 'Energy sector momentum',
+                        'timeframe': '3-7 days',
+                        'risk': 'Medium'
+                    })
+        
+        return opportunities[:3]  # Max 3 opportunità
+        
+    except:
+        return []
+
+def get_risk_recommendation(risk_level):
+    """Raccomandazione basata sul livello di rischio"""
+    recommendations = {
+        'HIGH': 'Reduce position sizes, increase cash allocation',
+        'MEDIUM': 'Monitor closely, consider hedging strategies',
+        'LOW': 'Normal risk management protocols',
+        'UNKNOWN': 'Maintain cautious approach until clarity'
+    }
+    return recommendations.get(risk_level, 'Standard risk management')
+
+# === WEEKEND-SPECIFIC ANALYSIS ===
+def get_weekend_market_insights():
+    """Genera insights specifici per i mercati durante il weekend"""
+    try:
+        italy_tz = pytz.timezone('Europe/Rome')
+        now = datetime.datetime.now(italy_tz)
+        
+        insights = {
+            'crypto_focus': [],
+            'weekend_patterns': [],
+            'monday_preparation': [],
+            'risk_factors': []
+        }
+        
+        # === CRYPTO FOCUS (unico mercato attivo) ===
+        try:
+            crypto_prices = get_live_crypto_prices()
+            if crypto_prices:
+                btc_data = crypto_prices.get('BTC', {})
+                eth_data = crypto_prices.get('ETH', {})
+                
+                # Bitcoin weekend behavior
+                if btc_data.get('price', 0) > 0:
+                    btc_change = btc_data.get('change_pct', 0)
+                    btc_volume = btc_data.get('volume_24h', 0)
+                    
+                    if abs(btc_change) > 3:  # High volatility weekend
+                        insights['crypto_focus'].append(f"High volatility weekend: BTC {btc_change:+.1f}% - thin liquidity amplifies moves")
+                    elif abs(btc_change) < 0.5:  # Low volatility
+                        insights['crypto_focus'].append(f"Quiet weekend: BTC consolidating - possible breakout Monday")
+                    else:
+                        insights['crypto_focus'].append(f"Normal weekend activity: BTC {btc_change:+.1f}% - standard liquidity")
+                    
+                    # Weekend liquidity analysis
+                    if btc_volume > 0:
+                        volume_desc = "high" if btc_volume > 20000000000 else "low" if btc_volume < 10000000000 else "normal"
+                        insights['crypto_focus'].append(f"Weekend liquidity: {volume_desc} - expect {'higher' if volume_desc == 'low' else 'normal'} volatility")
+        except Exception:
+            insights['crypto_focus'].append("Crypto weekend analysis: Data pending")
+        
+        # === WEEKEND PATTERNS ===
+        day_name = "Saturday" if now.weekday() == 5 else "Sunday" if now.weekday() == 6 else "Weekend"
+        
+        if now.weekday() == 5:  # Saturday
+            insights['weekend_patterns'] = [
+                "Saturday pattern: Crypto typically quieter, news flow lighter",
+                "Asia closed: Focus shifts to global news and crypto fundamentals",
+                "Time zone effect: US West Coast still active, Europe winding down"
+            ]
+        elif now.weekday() == 6:  # Sunday
+            insights['weekend_patterns'] = [
+                "Sunday pattern: Asia prep begins, crypto can show direction",
+                "Pre-positioning: Institutional flows minimal, retail activity",
+                "Monday setup: Weekend developments set tone for week opening"
+            ]
+        
+        # === MONDAY PREPARATION ===
+        # Analizza le notizie weekend per impatto Monday
+        try:
+            notizie_weekend = get_notizie_critiche()
+            high_impact_news = 0
+            
+            for news in notizie_weekend[:5]:
+                title = news.get('titolo', '').lower()
+                if any(keyword in title for keyword in ['fed', 'central bank', 'rates', 'war', 'crisis', 'breakthrough']):
+                    high_impact_news += 1
+            
+            if high_impact_news >= 2:
+                insights['monday_preparation'].append("High impact weekend news: Expect volatile Monday opening")
+                insights['monday_preparation'].append("Pre-market futures: Monitor for gap openings")
+                insights['monday_preparation'].append("Sectors to watch: Those mentioned in weekend developments")
+            else:
+                insights['monday_preparation'].append("Quiet weekend news: Normal Monday opening expected")
+                insights['monday_preparation'].append("Technical levels: Weekend consolidation may hold")
+        except Exception:
+            insights['monday_preparation'].append("Monday preparation: Monitoring weekend developments")
+        
+        # === RISK FACTORS ===
+        # Weekend-specific risks
+        current_hour = now.hour
+        
+        if 22 <= current_hour or current_hour <= 6:  # Overnight hours
+            insights['risk_factors'].append("Overnight hours: Thin liquidity increases gap risk")
+        
+        insights['risk_factors'].extend([
+            "Weekend liquidity: Lower volumes can amplify price moves",
+            "News sensitivity: Limited market reaction until Monday",
+            "Crypto volatility: 24/7 trading continues with weekend patterns"
+        ])
+        
+        return insights
+        
+    except Exception as e:
+        print(f"⚠️ [WEEKEND-INSIGHTS] Errore: {e}")
+        return {
+            'crypto_focus': ["Weekend crypto analysis: Data updating"],
+            'weekend_patterns': ["Weekend patterns: Analysis in progress"],
+            'monday_preparation': ["Monday prep: Monitoring developments"],
+            'risk_factors': ["Weekend risks: Standard protocols active"]
+        }
+
+def format_weekend_insights_for_message(insights, time_slot):
+    """Formatta gli insights weekend per i messaggi"""
+    try:
+        formatted_parts = []
+        
+        if time_slot == "10:00":  # Morning
+            formatted_parts.append("🏖️ **Weekend Market Insights:**")
+            for insight in insights.get('weekend_patterns', [])[:2]:
+                formatted_parts.append(f"• {insight}")
+            
+            formatted_parts.append("")
+            formatted_parts.append("₿ **Crypto Weekend Focus:**")
+            for insight in insights.get('crypto_focus', [])[:2]:
+                formatted_parts.append(f"• {insight}")
+                
+        elif time_slot == "15:00":  # Afternoon  
+            formatted_parts.append("📊 **Weekend Activity Review:**")
+            for insight in insights.get('crypto_focus', []):
+                formatted_parts.append(f"• {insight}")
+                
+        elif time_slot == "20:00":  # Evening
+            formatted_parts.append("🔮 **Monday Preparation:**")
+            for insight in insights.get('monday_preparation', []):
+                formatted_parts.append(f"• {insight}")
+            
+            formatted_parts.append("")
+            formatted_parts.append("⚠️ **Weekend Risk Awareness:**")
+            for insight in insights.get('risk_factors', [])[:3]:
+                formatted_parts.append(f"• {insight}")
+        
+        return formatted_parts
+        
+    except:
+        return ["Weekend insights: Analysis in progress..."]
+
 def calculate_technical_indicators_lite(df):
     """Calcola indicatori tecnici ottimizzati per Render Lite"""
     indicators = {}
-    
-    try:
-        # Verifica che df abbia la colonna Close e almeno 50 record
-        if df.empty or 'Close' not in df.columns or len(df) < 50:
-            print(f"⚠️ [TECH-INDICATORS] DataFrame insufficiente: {len(df)} rows")
-            return {}
-        
-        print(f"📊 [TECH-INDICATORS] Calcolo indicatori su {len(df)} records...")
-        
-        # Calcola ogni indicatore con gestione errori individuale
-        try:
-            indicators['SMA'] = calculate_sma(df)
-            print("✅ [TECH-INDICATORS] SMA calcolato")
-        except Exception as e:
-            print(f"⚠️ [TECH-INDICATORS] Errore SMA: {e}")
-            indicators['SMA'] = pd.Series([0] * len(df), index=df.index)
-        
-        try:
-            indicators['MAC'] = calculate_mac(df)
-            print("✅ [TECH-INDICATORS] MAC calcolato")
-        except Exception as e:
-            print(f"⚠️ [TECH-INDICATORS] Errore MAC: {e}")
-            indicators['MAC'] = pd.Series([0] * len(df), index=df.index)
-        
-        try:
-            indicators['RSI'] = calculate_rsi(df)
-            print("✅ [TECH-INDICATORS] RSI calcolato")
-        except Exception as e:
-            print(f"⚠️ [TECH-INDICATORS] Errore RSI: {e}")
-            indicators['RSI'] = pd.Series([0] * len(df), index=df.index)
-        
-        try:
-            indicators['MACD'] = calculate_macd(df)
-            print("✅ [TECH-INDICATORS] MACD calcolato")
-        except Exception as e:
-            print(f"⚠️ [TECH-INDICATORS] Errore MACD: {e}")
-            indicators['MACD'] = pd.Series([0] * len(df), index=df.index)
-        
-        try:
-            indicators['Bollinger'] = calculate_bollinger_bands(df)
-            print("✅ [TECH-INDICATORS] Bollinger calcolato")
-        except Exception as e:
-            print(f"⚠️ [TECH-INDICATORS] Errore Bollinger: {e}")
-            indicators['Bollinger'] = pd.Series([0] * len(df), index=df.index)
-        
-        try:
-            indicators['EMA'] = calculate_ema(df)
-            print("✅ [TECH-INDICATORS] EMA calcolato")
-        except Exception as e:
-            print(f"⚠️ [TECH-INDICATORS] Errore EMA: {e}")
-            indicators['EMA'] = pd.Series([0] * len(df), index=df.index)
-        
-        # Filtra indicatori vuoti
-        valid_indicators = {k: v for k, v in indicators.items() if not v.empty}
-        print(f"✅ [TECH-INDICATORS] Completati {len(valid_indicators)}/{len(indicators)} indicatori")
-        
-        return valid_indicators
-        
-    except Exception as e:
-        print(f"❌ [TECH-INDICATORS] Errore generale: {e}")
-        return {}
+    indicators['SMA'] = calculate_sma(df)
+    indicators['MAC'] = calculate_mac(df)
+    indicators['RSI'] = calculate_rsi(df)
+    indicators['MACD'] = calculate_macd(df)
+    indicators['Bollinger'] = calculate_bollinger_bands(df)
+    indicators['EMA'] = calculate_ema(df)
+    return indicators
 
 def calculate_ml_features_lite(df):
     """Features ML ottimizzate"""
@@ -1801,145 +2035,6 @@ def _send_single_message_lite(clean_msg, url):
     
     return False
 
-# === SISTEMA CONTROLLO WEEKEND E FESTIVITÀ ===
-def is_weekend_or_holiday(check_date=None):
-    """Controlla se è weekend o festività finanziaria"""
-    if check_date is None:
-        check_date = datetime.date.today()
-    
-    # Weekend
-    if check_date.weekday() in [5, 6]:  # Sabato=5, Domenica=6
-        return True, "Weekend"
-    
-    # Festività principali USA/Europa (2024-2025)
-    holidays_2024 = [
-        (1, 1),   # Capodanno
-        (1, 15),  # MLK Day (3° lunedì gennaio)
-        (2, 19),  # Presidents Day (3° lunedì febbraio)
-        (3, 29),  # Good Friday
-        (5, 27),  # Memorial Day (ultimo lunedì maggio)
-        (6, 19),  # Juneteenth
-        (7, 4),   # Independence Day
-        (9, 2),   # Labor Day (1° lunedì settembre)
-        (10, 14), # Columbus Day (2° lunedì ottobre)
-        (11, 11), # Veterans Day
-        (11, 28), # Thanksgiving (4° giovedì novembre)
-        (12, 25), # Christmas
-    ]
-    
-    holidays_2025 = [
-        (1, 1),   # Capodanno
-        (1, 20),  # MLK Day
-        (2, 17),  # Presidents Day
-        (4, 18),  # Good Friday
-        (5, 26),  # Memorial Day
-        (6, 19),  # Juneteenth
-        (7, 4),   # Independence Day
-        (9, 1),   # Labor Day
-        (10, 13), # Columbus Day
-        (11, 11), # Veterans Day
-        (11, 27), # Thanksgiving
-        (12, 25), # Christmas
-    ]
-    
-    current_holidays = holidays_2025 if check_date.year == 2025 else holidays_2024
-    
-    for month, day in current_holidays:
-        if check_date.month == month and check_date.day == day:
-            return True, "Festività"
-    
-    return False, "Mercati Aperti"
-
-def get_market_status_message():
-    """Restituisce messaggio sullo stato dei mercati"""
-    is_closed, reason = is_weekend_or_holiday()
-    
-    if is_closed:
-        if reason == "Weekend":
-            return "🔴 *MERCATI CHIUSI* - Weekend (Sabato/Domenica)"
-        else:
-            return f"🔴 *MERCATI CHIUSI* - {reason}"
-    else:
-        return "🟢 *MERCATI APERTI* - Sessione di trading attiva"
-
-def format_price_with_nan_check(value, asset_name, format_type="standard"):
-    """Formatta prezzo con controllo NaN e fallback"""
-    try:
-        # Controlli per valori non validi
-        if value is None or str(value).lower() in ['nan', 'none', '']:
-            return f"• {asset_name}: Prezzo non disponibile - Dati in aggiornamento"
-        
-        # Converti a float se necessario
-        if isinstance(value, str):
-            try:
-                value = float(value)
-            except (ValueError, TypeError):
-                return f"• {asset_name}: Formato prezzo non valido - Controllo dati"
-        
-        # Controlli per valori numerici non validi
-        if not isinstance(value, (int, float)) or value <= 0:
-            return f"• {asset_name}: Valore prezzo non valido - Verifica sorgente dati"
-        
-        # Formattazione basata sul tipo
-        if format_type == "crypto" and value >= 1000:
-            price_str = f"${value:,.0f}"
-        elif format_type == "crypto" and value >= 1:
-            price_str = f"${value:,.2f}"
-        elif format_type == "crypto":
-            price_str = f"${value:.4f}"
-        elif format_type == "forex":
-            price_str = f"{value:.4f}"
-        elif format_type == "index" and value >= 10000:
-            price_str = f"{value:,.0f}"
-        elif format_type == "index":
-            price_str = f"{value:,.1f}"
-        else:  # standard
-            if value >= 1000:
-                price_str = f"${value:,.2f}"
-            else:
-                price_str = f"${value:.2f}"
-        
-        return price_str
-        
-    except Exception as e:
-        print(f"❌ [PRICE-FORMAT] Errore formattazione {asset_name}: {e}")
-        return f"• {asset_name}: Errore formattazione prezzo - Sistema in verifica"
-
-def safe_get_live_price(live_data, asset_name, category, description=""):
-    """Recupera prezzo live con gestione sicura di valori NaN"""
-    try:
-        # Cerca l'asset nella categoria specificata
-        if category not in live_data or asset_name not in live_data[category]:
-            return f"• {asset_name}: Dati non disponibili - API in caricamento - {description}"
-        
-        asset_data = live_data[category][asset_name]
-        price = asset_data.get('price', None)
-        change_pct = asset_data.get('change_pct', None)
-        
-        # Controllo NaN per prezzo
-        price_str = format_price_with_nan_check(price, asset_name, 
-            "crypto" if category == "crypto" else "forex" if category == "forex" else "index" if category == "indices" else "standard")
-        
-        if "non disponibile" in price_str or "non valido" in price_str or "errore" in price_str.lower():
-            return f"• {asset_name}: {price_str.split(':')[1].strip()} - {description}"
-        
-        # Controllo NaN per variazione percentuale
-        if change_pct is None or str(change_pct).lower() == 'nan':
-            change_str = "(variazione non disponibile)"
-        else:
-            try:
-                change_pct = float(change_pct)
-                change_sign = "+" if change_pct >= 0 else ""
-                change_str = f"({change_sign}{change_pct:.1f}%)"
-            except (ValueError, TypeError):
-                change_str = "(variazione non valida)"
-        
-        return f"• {asset_name}: {price_str} {change_str} - {description}"
-        
-    except Exception as e:
-        print(f"❌ [SAFE-PRICE] Errore recupero {asset_name}: {e}")
-        return f"• {asset_name}: Errore tecnico recupero dati - Supporto in verifica - {description}"
-
 # === CALENDARIO EVENTI (Stesso del sistema completo) ===
 today = datetime.date.today()
 
@@ -1967,44 +2062,60 @@ eventi = {
     ]
 }
 
-# === RSS FEEDS (Stesso sistema + Mercati Emergenti) ===
+# === RSS FEEDS ESTESI PER RASSEGNA STAMPA ===
 RSS_FEEDS = {
     "Finanza": [
         "https://feeds.reuters.com/reuters/businessNews",
-        "https://www.investing.com/rss/news_285.rss",
+        "https://www.investing.com/rss/news_285.rss", 
         "https://www.marketwatch.com/rss/topstories",
         "https://feeds.finance.yahoo.com/rss/2.0/headline",
-        "https://feeds.bloomberg.com/markets/news.rss"
+        "https://feeds.bloomberg.com/markets/news.rss",
+        "https://www.cnbc.com/id/100003114/device/rss/rss.html",
+        "https://feeds.feedburner.com/ForbesTechNews",
+        "https://www.ft.com/rss/home/uk",
+        "https://feeds.feedburner.com/zerohedge/feed"
     ],
     "Criptovalute": [
         "https://www.coindesk.com/arc/outboundfeeds/rss/",
         "https://cointelegraph.com/rss",
-        "https://cryptoslate.com/feed/",
-        "https://bitcoinist.com/feed/"
+        "https://cryptoslate.com/feed/", 
+        "https://bitcoinist.com/feed/",
+        "https://decrypt.co/feed",
+        "https://www.coinbase.com/rss",
+        "https://cryptonews.com/news/feed/",
+        "https://ambcrypto.com/feed/"
     ],
     "Geopolitica": [
         "https://feeds.reuters.com/Reuters/worldNews",
         "https://www.aljazeera.com/xml/rss/all.xml",
-        "http://feeds.bbci.co.uk/news/world/rss.xml",
-        "https://feeds.bbci.co.uk/news/rss.xml"
+        "http://feeds.bbci.co.uk/news/world/rss.xml", 
+        "https://feeds.bbci.co.uk/news/rss.xml",
+        "https://rss.cnn.com/rss/edition.rss",
+        "https://feeds.skynews.com/feeds/rss/world.xml",
+        "https://www.france24.com/en/rss",
+        "https://feeds.feedburner.com/euronews/en/news/"
     ],
     "Mercati Emergenti": [
         "https://feeds.reuters.com/reuters/emergingMarketsNews",
         "https://www.investing.com/rss/news_14.rss",
         "https://feeds.bloomberg.com/emerging-markets/news.rss",
-        "https://www.ft.com/emerging-markets?format=rss",
-        "https://www.wsj.com/xml/rss/3_7455.xml"
+        "https://www.ft.com/emerging-markets?format=rss", 
+        "https://www.wsj.com/xml/rss/3_7455.xml",
+        "https://www.scmp.com/rss/4/feed",
+        "https://feeds.feedburner.com/businessweek/globalbiz",
+        "https://www.nasdaq.com/feed/rssoutbound?category=Emerging%20Markets"
     ]
 }
 
 # === NOTIZIE CRITICHE (Stesso algoritmo, ottimizzato) ===
 def get_notizie_critiche():
-    """Recupero notizie ottimizzato per velocità"""
+    """Recupero notizie ottimizzato per velocità con controllo data"""
     notizie_critiche = []
     
     from datetime import timezone
     now_utc = datetime.datetime.now(timezone.utc)
     soglia_24h = now_utc - datetime.timedelta(hours=24)
+    soglia_6h = now_utc - datetime.timedelta(hours=6)  # Notizie più fresche
     
     def is_highlighted(title):
         keywords = [
@@ -2017,10 +2128,17 @@ def get_notizie_critiche():
         try:
             if hasattr(entry, 'published_parsed') and entry.published_parsed:
                 news_time = datetime.datetime(*entry.published_parsed[:6], tzinfo=timezone.utc)
-                return news_time >= soglia_24h
-            return True  # In dubbio, includiamo
+                # Weekend: accetta notizie fino a 48h fa
+                # Weekday: solo ultime 24h (o 6h per notizie critiche)
+                if is_weekend():
+                    soglia = now_utc - datetime.timedelta(hours=48)
+                else:
+                    soglia = soglia_6h  # Notizie più fresche nei giorni lavorativi
+                return news_time >= soglia
+            # Se non ha timestamp, accetta solo se non è weekend
+            return not is_weekend()
         except:
-            return True
+            return not is_weekend()  # In caso di errore, escludi durante weekend
     
     for categoria, feed_urls in RSS_FEEDS.items():
         for url in feed_urls[:2]:  # Limitiamo a 2 feed per categoria per velocità
@@ -2140,34 +2258,9 @@ def get_asset_technical_summary(asset_name):
     # Su Render Lite, ritorniamo analisi statiche per non dipendere da file esterni
     try:
         if "bitcoin" in asset_name.lower() or "btc" in asset_name.lower():
-            # Usa dati live reali invece di valori hardcoded
-            try:
-                crypto_prices = get_live_crypto_prices()
-                btc_data = crypto_prices.get('BTC', {})
-                if btc_data.get('price', 0) > 0:
-                    btc_price = btc_data['price']
-                    change_pct = btc_data.get('change_pct', 0)
-                    trend = "BULLISH" if change_pct > 0 else "BEARISH" if change_pct < -2 else "NEUTRAL"
-                    return f"📊 Bitcoin: {'🟢' if change_pct > 0 else '🔴' if change_pct < -2 else '⚪'} {trend}\n   Current: ${btc_price:,.0f} | 24h: {change_pct:+.1f}%"
-                else:
-                    return "📊 Bitcoin: ⚪ DATI NON DISPONIBILI\n   Status: API temporaneamente non raggiungibile"
-            except Exception as e:
-                return f"📊 Bitcoin: ❌ ERRORE ANALISI\n   Error: {str(e)[:50]}"
-        
+            return "📊 Bitcoin: 🟢 BULLISH (Trend consolidation)\n   Range: $42k-$45k | Momentum: Positive"
         elif "s&p" in asset_name.lower() or "500" in asset_name.lower():
-            # Usa dati live reali per S&P 500
-            try:
-                all_live_data = get_all_live_data()
-                sp_data = all_live_data.get('stocks', {}).get('S&P 500', {})
-                if sp_data.get('price', 0) > 0:
-                    sp_price = sp_data['price']
-                    change_pct = sp_data.get('change_pct', 0)
-                    trend = "BULLISH" if change_pct > 0.5 else "BEARISH" if change_pct < -0.5 else "NEUTRAL"
-                    return f"📊 S&P 500: {'🟢' if change_pct > 0.5 else '🔴' if change_pct < -0.5 else '⚪'} {trend}\n   Current: {sp_price:,.0f} | Daily: {change_pct:+.1f}%"
-                else:
-                    return "📊 S&P 500: ⚪ DATI NON DISPONIBILI\n   Status: API temporaneamente non raggiungibile"
-            except Exception as e:
-                return f"📊 S&P 500: ❌ ERRORE ANALISI\n   Error: {str(e)[:50]}"
+            return "📊 S&P 500: ⚪ NEUTRAL (Mixed signals)\n   Range: 4800-4850 | Volatility: Normal"
         elif "gold" in asset_name.lower() or "oro" in asset_name.lower():
             return "📊 Gold: 🟢 BULLISH (Safe haven demand)\n   Level: $2040-2060 | Trend: Upward"
         else:
@@ -2349,46 +2442,15 @@ def generate_ml_comment_for_news(news):
         # Commenti enhanced con raccomandazioni specifiche
         if "bitcoin" in title or "crypto" in title or "btc" in title:
             if sentiment == "POSITIVE" and impact == "HIGH":
-                # Usa dati live reali per resistance dinamica
-                try:
-                    crypto_prices = get_live_crypto_prices()
-                    if crypto_prices and crypto_prices.get('BTC', {}).get('price', 0) > 0:
-                        btc_price = crypto_prices['BTC']['price']
-                        resistance_level = int(btc_price * 1.06 / 1000) * 1000
-                        return f"🟢 Crypto Rally: BTC breakout atteso. Monitora {resistance_level/1000:.0f}k resistance. Strategy: Long BTC, ALT rotation."
-                    else:
-                        return "🟢 Crypto Rally: BTC breakout atteso. Strategy: Long BTC, ALT rotation, monitor resistance."
-                except Exception:
-                    return "🟢 Crypto Rally: BTC momentum positivo. Strategy: Long BTC, ALT rotation."
+                return "🟢 Crypto Rally: BTC breakout atteso. Monitora 45k resistance. Strategy: Long BTC, ALT rotation."
             elif sentiment == "NEGATIVE" and impact == "HIGH":
-                # Usa dati live reali per support dinamico
-                try:
-                    crypto_prices = get_live_crypto_prices()
-                    if crypto_prices and crypto_prices.get('BTC', {}).get('price', 0) > 0:
-                        btc_price = crypto_prices['BTC']['price']
-                        support_level = int(btc_price * 0.92 / 1000) * 1000
-                        return f"🔴 Crypto Dump: Pressione vendita forte. Support {support_level/1000:.0f}k critico. Strategy: Reduce crypto exposure."
-                    else:
-                        return "🔴 Crypto Dump: Pressione vendita forte. Strategy: Reduce crypto exposure, monitor support."
-                except Exception:
-                    return "🔴 Crypto Dump: Pressione vendita. Strategy: Risk management, reduce exposure."
+                return "🔴 Crypto Dump: Pressione vendita forte. Support 38k critico. Strategy: Reduce crypto exposure."
             elif "regulation" in title or "ban" in title:
                 return "⚠️ Regulation Risk: Volatilità normativa. Strategy: Hedge crypto positions, monitor compliance coins."
             elif "etf" in title:
                 return "📈 ETF Development: Institutional adoption. Strategy: Long-term bullish, monitor approval timeline."
             else:
-                # Usa prezzi crypto live per range dinamico
-                try:
-                    crypto_prices = get_live_crypto_prices()
-                    if crypto_prices and crypto_prices.get('BTC', {}).get('price', 0) > 0:
-                        btc_price = crypto_prices['BTC']['price']
-                        support_level = int(btc_price * 0.95 / 1000) * 1000
-                        resistance_level = int(btc_price * 1.05 / 1000) * 1000
-                        return f"⚪ Crypto Neutral: Consolidamento atteso. Strategy: Range trading {support_level/1000:.0f}k-{resistance_level/1000:.0f}k, wait breakout."
-                    else:
-                        return "⚪ Crypto Neutral: Consolidamento atteso. Strategy: Monitor price action per range definition."
-                except Exception:
-                    return "⚪ Crypto Neutral: Consolidamento atteso. Strategy: Technical analysis in progress."
+                return "⚪ Crypto Neutral: Consolidamento atteso. Strategy: Range trading 40-43k, wait breakout."
         
         elif "fed" in title or "rate" in title or "tassi" in title or "powell" in title:
             if sentiment == "NEGATIVE" and impact == "HIGH":
@@ -2428,22 +2490,94 @@ def generate_ml_comment_for_news(news):
         return "❌ ML Analysis Error: Technical issue in news processing."
 
 # === REPORT MORNING NEWS ENHANCED ===
+def load_press_review_history():
+    """Carica la storia dei titoli delle rassegne precedenti"""
+    try:
+        if os.path.exists(PRESS_REVIEW_HISTORY_FILE):
+            with open(PRESS_REVIEW_HISTORY_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+    except Exception as e:
+        print(f"⚠️ [PRESS-HISTORY] Errore caricamento: {e}")
+    return {}
+
+def save_press_review_history(history_data):
+    """Salva la storia dei titoli delle rassegne"""
+    try:
+        with open(PRESS_REVIEW_HISTORY_FILE, 'w', encoding='utf-8') as f:
+            json.dump(history_data, f, indent=2, ensure_ascii=False)
+        print(f"💾 [PRESS-HISTORY] Storia salvata con {len(history_data)} giorni")
+        return True
+    except Exception as e:
+        print(f"❌ [PRESS-HISTORY] Errore salvataggio: {e}")
+        return False
+
+def get_previous_press_titles():
+    """Recupera titoli delle rassegne degli ultimi 3 giorni"""
+    history = load_press_review_history()
+    previous_titles = set()
+    
+    # Ultime 3 date
+    today = datetime.datetime.now().strftime("%Y%m%d")
+    for days_back in range(1, 4):  # 1, 2, 3 giorni fa
+        date_key = (datetime.datetime.now() - datetime.timedelta(days=days_back)).strftime("%Y%m%d")
+        if date_key in history:
+            previous_titles.update(history[date_key])
+    
+    print(f"📊 [PRESS-HISTORY] Caricati {len(previous_titles)} titoli da evitare")
+    return previous_titles
+
+def save_todays_press_titles(titoli_utilizzati):
+    """Salva i titoli utilizzati oggi per evitare duplicati domani"""
+    history = load_press_review_history()
+    today = datetime.datetime.now().strftime("%Y%m%d")
+    
+    # Mantieni solo ultimi 7 giorni
+    cutoff_date = (datetime.datetime.now() - datetime.timedelta(days=7)).strftime("%Y%m%d")
+    history = {k: v for k, v in history.items() if k > cutoff_date}
+    
+    # Aggiungi oggi
+    history[today] = list(titoli_utilizzati)
+    
+    save_press_review_history(history)
+    print(f"💾 [PRESS-HISTORY] Salvati {len(titoli_utilizzati)} titoli di oggi")
+
 def get_extended_morning_news():
-    """Recupera 20-30 notizie per la rassegna stampa mattutina da tutti i feed RSS"""
+    """Recupera notizie fresche per rassegna stampa 07:00 con deduplicazione avanzata"""
     notizie_estese = []
+    titoli_visti = set()  # Per evitare duplicati
+    url_visti = set()     # Anche per URL duplicati
+    
+    # Carica titoli delle rassegne precedenti da evitare
+    previous_titles = get_previous_press_titles()
     
     from datetime import timezone
     now_utc = datetime.datetime.now(timezone.utc)
-    soglia_12h = now_utc - datetime.timedelta(hours=12)
+    italy_tz = pytz.timezone('Europe/Rome')
+    now_italy = datetime.datetime.now(italy_tz)
+    
+    # Per rassegna alle 07:00: evitare overlap con rassegna precedente (07:00 ieri)
+    if now_italy.hour <= 9:  # Mattina
+        # Dalle 07:00 di ieri (24 ore dalla rassegna precedente) per evitare duplicati
+        soglia_notte = now_utc - datetime.timedelta(hours=24)
+    else:
+        # Per test durante il giorno: dalle 07:00 di oggi
+        this_morning_7am = now_italy.replace(hour=7, minute=0, second=0, microsecond=0)
+        soglia_notte = this_morning_7am.astimezone(timezone.utc)
+    
+    # Fallback per notizie senza timestamp: max 6 ore
+    soglia_fallback = now_utc - datetime.timedelta(hours=6)
     
     def is_recent_morning_news(entry):
         try:
             if hasattr(entry, 'published_parsed') and entry.published_parsed:
                 news_time = datetime.datetime(*entry.published_parsed[:6], tzinfo=timezone.utc)
-                return news_time >= soglia_12h
-            return True
+                # Notizie overnight + early morning per rassegna 07:00
+                return news_time >= soglia_notte
+            else:
+                # Se no timestamp, accetta solo se nei primi 3 elementi del feed
+                return True  # Assumiamo che i primi siano i più recenti
         except:
-            return True
+            return False
     
     target_per_categoria = 8  # Aumentato per garantire almeno 7 notizie
     
@@ -2459,20 +2593,100 @@ def get_extended_morning_news():
                 if parsed.bozo or not parsed.entries:
                     continue
                 
-                for entry in parsed.entries[:15]:
-                    title = entry.get("title", "")
+                # Ordina entries per data se possibile (più recenti primi)
+                entries_sorted = []
+                for entry in parsed.entries[:20]:  # Più entries da considerare
+                    try:
+                        if hasattr(entry, 'published_parsed') and entry.published_parsed:
+                            pub_time = datetime.datetime(*entry.published_parsed[:6], tzinfo=timezone.utc)
+                            entries_sorted.append((pub_time, entry))
+                        else:
+                            # Entry senza timestamp - assumiamo recente
+                            entries_sorted.append((now_utc, entry))
+                    except:
+                        continue
+                
+                # Ordina per timestamp (più recenti primi)
+                entries_sorted.sort(key=lambda x: x[0], reverse=True)
+                
+                for pub_time, entry in entries_sorted:
+                    title = entry.get("title", "").strip()
+                    link = entry.get("link", "")
                     
+                    # Skip notizie vuote
+                    if not title or len(title) < 15:
+                        continue
+                    
+                    # Deduplicazione avanzata
+                    # 1. Per titolo (primi 60 caratteri, case-insensitive)
+                    title_key = title.lower()[:60].replace(" ", "")
+                    if title_key in titoli_visti:
+                        continue
+                    
+                    # 2. Check contro rassegne precedenti (evita notizie già pubblicate)
+                    skip_previous = False
+                    title_clean = title.lower().strip()
+                    for prev_title in previous_titles:
+                        prev_clean = prev_title.lower().strip()
+                        # Se titolo molto simile (80%+ caratteri in comune)
+                        if len(title_clean) > 20 and len(prev_clean) > 20:
+                            overlap = len(set(title_clean) & set(prev_clean))
+                            similarity = overlap / max(len(set(title_clean)), len(set(prev_clean)))
+                            if similarity > 0.8:
+                                skip_previous = True
+                                break
+                        # O se prime 40 caratteri identiche
+                        elif title_clean[:40] == prev_clean[:40]:
+                            skip_previous = True
+                            break
+                    
+                    if skip_previous:
+                        continue
+                    
+                    # 3. Per URL (evita stesso articolo da fonti diverse)
+                    url_key = link.split('?')[0] if link else ""  # Rimuovi query params
+                    if url_key and url_key in url_visti:
+                        continue
+                    
+                    # 4. Check parole chiave duplicate (titoli troppo simili nella stessa sessione)
+                    skip_similar = False
+                    title_words = set(title.lower().split()[:8])  # Prime 8 parole
+                    for existing_title in [t for t in titoli_visti]:
+                        existing_words = set(existing_title.split()[:8])
+                        overlap = len(title_words & existing_words)
+                        if overlap >= 5 and len(title_words) > 6:  # 5+ parole in comune
+                            skip_similar = True
+                            break
+                    
+                    if skip_similar:
+                        continue
+                    
+                    # Check se è notizia recente
                     if is_recent_morning_news(entry):
-                        link = entry.get("link", "")
                         source = parsed.feed.get("title", "Unknown")
+                        
+                        # Format timestamp
+                        try:
+                            if hasattr(entry, 'published_parsed') and entry.published_parsed:
+                                data_str = pub_time.strftime('%H:%M')
+                            else:
+                                data_str = "Fresh"
+                        except:
+                            data_str = "Now"
                         
                         notizie_estese.append({
                             "titolo": title,
                             "link": link,
                             "fonte": source,
                             "categoria": categoria,
-                            "data": "Recente"
+                            "data": data_str,
+                            "timestamp": pub_time
                         })
+                        
+                        # Marca come visto
+                        titoli_visti.add(title_key)
+                        if url_key:
+                            url_visti.add(url_key)
                         
                         categoria_count += 1
                         
@@ -2487,6 +2701,17 @@ def get_extended_morning_news():
         
         if len(notizie_estese) >= 30:
             break
+    
+    # Ordinamento finale per timestamp (più fresche prime)
+    try:
+        notizie_estese.sort(key=lambda x: x.get('timestamp', datetime.datetime.min.replace(tzinfo=timezone.utc)), reverse=True)
+    except:
+        pass  # Se errore nell'ordinamento, mantieni ordine originale
+    
+    print(f"✅ [MORNING-NEWS] Recuperate {len(notizie_estese)} notizie uniche")
+    if notizie_estese:
+        print(f"📅 [MORNING-NEWS] Più recente: {notizie_estese[0].get('data', 'N/A')}")
+        print(f"📅 [MORNING-NEWS] Più vecchia: {notizie_estese[-1].get('data', 'N/A')}")
     
     return notizie_estese[:25]  # Limitiamo a 25 per velocità
 
@@ -2539,6 +2764,11 @@ def generate_morning_news_briefing():
         italy_tz = pytz.timezone('Europe/Rome')
         now = datetime.datetime.now(italy_tz)
         
+        # === CONTROLLO WEEKEND ===
+        if is_weekend():
+            print(f"🏖️ [PRESS-REVIEW] Weekend rilevato - invio messaggio weekend instead")
+            return send_weekend_briefing("10:00")
+        
         print(f"📰 [PRESS-REVIEW] Generazione Press Review 6 messaggi - {now.strftime('%H:%M:%S')}")
         
         # Recupera notizie estese
@@ -2576,21 +2806,22 @@ def generate_morning_news_briefing():
             
             msg_parts = []
             
-            # Header per categoria con buongiorno
-            emoji_map = {
-                'Finanza': '💰',
-                'Criptovalute': '₿', 
-                'Geopolitica': '🌍',
-                'Mercati Emergenti': '🌟'
-            }
-            emoji = emoji_map.get(categoria, '📊')
-            
-            # Aggiungi buongiorno al primo messaggio
-            if i == 1:
-                msg_parts.append(f"🌅 *BUONGIORNO! PRESS REVIEW - {categoria.upper()}*")
-            else:
-                msg_parts.append(f"{emoji} *PRESS REVIEW - {categoria.upper()}*")
-            msg_parts.append(f"📅 {now.strftime('%d/%m/%Y %H:%M')} • Messaggio {i}/6")
+        # Header per categoria
+        emoji_map = {
+            'Finanza': '💰',
+            'Criptovalute': '₿', 
+            'Geopolitica': '🌍',
+            'Mercati Emergenti': '🌟'
+        }
+        emoji = emoji_map.get(categoria, '📊')
+        
+        # Aggiungi status mercati
+        status, status_msg = get_market_status()
+        
+        msg_parts.append(f"{emoji} *PRESS REVIEW - {categoria.upper()}*")
+        msg_parts.append(f"📅 {now.strftime('%d/%m/%Y %H:%M')} • Messaggio {i}/6")
+        if i == 1:  # Solo nel primo messaggio
+            msg_parts.append(f"📴 **Mercati**: {status_msg}")
             msg_parts.append("─" * 35)
             msg_parts.append("")
             
@@ -2615,68 +2846,43 @@ def generate_morning_news_briefing():
                     msg_parts.append(f"🔗 {notizia['link'][:60]}...")
                 msg_parts.append("")
             
-            # === STATO MERCATI E PREZZI LIVE CON CONTROLLI WEEKEND/FESTIVITÀ ===
+            # === AGGIUNGE SEZIONE PREZZI LIVE PER CATEGORIA RILEVANTE ===
             if categoria in ['Finanza', 'Criptovalute']:
                 try:
-                    # Controllo weekend/festività per mercati tradizionali
-                    market_status = get_market_status_message()
-                    
-                    if categoria == 'Finanza':
-                        # Aggiungi sempre lo stato dei mercati per la sezione Finanza
-                        msg_parts.append("📊 *STATUS MERCATI & PREZZI LIVE*")
-                        msg_parts.append(market_status)
-                        msg_parts.append("")
-                    
                     all_live_data = get_all_live_data()
                     if all_live_data:
+                        msg_parts.append("📈 *PREZZI LIVE CORRELATI*")
+                        msg_parts.append("")
+                        
                         if categoria == 'Finanza':
                             # Mostra i principali indici USA/EU per notizie finanziarie
                             for asset_name in ['S&P 500', 'NASDAQ', 'FTSE MIB', 'DAX']:
-                                line = safe_get_live_price(all_live_data, asset_name, 
-                                    'stocks' if asset_name in ['S&P 500', 'NASDAQ'] else 'indices', 
-                                    "Key index tracker")
-                                msg_parts.append(line)
+                                line = format_live_price(asset_name, all_live_data, "Key index tracker")
+                                if "non disponibile" not in line:
+                                    msg_parts.append(line)
                             
                             # Aggiungi forex chiave
                             for asset_name in ['EUR/USD', 'DXY']:
-                                line = safe_get_live_price(all_live_data, asset_name, 'forex', "FX focus")
-                                msg_parts.append(line)
+                                line = format_live_price(asset_name, all_live_data, "FX focus")
+                                if "non disponibile" not in line:
+                                    msg_parts.append(line)
                         
                         elif categoria == 'Criptovalute':
-                            msg_parts.append("📈 *CRYPTO LIVE (24/7)*")
-                            msg_parts.append("")
-                            
                             # Mostra le principali crypto per notizie crypto
                             for asset_name in ['BTC', 'ETH', 'BNB', 'SOL']:
-                                line = safe_get_live_price(all_live_data, asset_name, 'crypto', "Crypto tracker")
-                                msg_parts.append(line)
+                                line = format_live_price(asset_name, all_live_data, "Crypto tracker")
+                                if "non disponibile" not in line:
+                                    msg_parts.append(line)
                             
-                            # Market cap totale con controllo NaN
-                            try:
-                                total_cap = all_live_data.get('crypto', {}).get('TOTAL_MARKET_CAP', 0)
-                                if total_cap and str(total_cap).lower() != 'nan' and total_cap > 0:
-                                    cap_t = total_cap / 1e12
-                                    msg_parts.append(f"• Total Cap: ${cap_t:.2f}T - Market expansion tracking")
-                                else:
-                                    msg_parts.append("• Total Cap: Calcolo in corso - Market data updating")
-                            except Exception:
-                                msg_parts.append("• Total Cap: Dati non disponibili - System check")
+                            # Market cap totale
+                            if 'TOTAL_MARKET_CAP' in all_live_data.get('crypto', {}):
+                                total_cap = all_live_data['crypto']['TOTAL_MARKET_CAP']
+                                cap_t = total_cap / 1e12
+                                msg_parts.append(f"• Total Cap: ${cap_t:.2f}T - Market expansion tracking")
                         
                         msg_parts.append("")
-                    else:
-                        msg_parts.append("📊 *PREZZI LIVE CORRELATI*")
-                        if categoria == 'Finanza':
-                            msg_parts.append("• Indici: Dati in caricamento - API verification")
-                            msg_parts.append("• Forex: Dati in caricamento - System check")
-                        else:
-                            msg_parts.append("• Crypto: Dati in caricamento - API verification")
-                        msg_parts.append("")
-                        
                 except Exception as e:
                     print(f"⚠️ [RASSEGNA] Errore aggiunta prezzi live per {categoria}: {e}")
-                    msg_parts.append("📊 *PREZZI LIVE CORRELATI*")
-                    msg_parts.append("• Sistema prezzi temporaneamente non disponibile")
-                    msg_parts.append("")
             
             # Footer categoria
             msg_parts.append("─" * 35)
@@ -2748,7 +2954,8 @@ def generate_morning_news_briefing():
         
         # === MESSAGGIO 6: CALENDARIO EVENTI + RACCOMANDAZIONI ML ===
         try:
-            print("🔄 [MORNING] Preparazione messaggio 6 (finale)...")
+            # Recupera raccomandazioni ML per calendario
+            news_analysis_final = analyze_news_sentiment_and_impact()
             
             # Messaggio finale con calendario e raccomandazioni ML (NO duplicazione notizie)
             final_parts = []
@@ -2761,24 +2968,12 @@ def generate_morning_news_briefing():
             final_parts.append("🗓️ *CALENDARIO EVENTI CHIAVE*")
             final_parts.append("")
             
-            # Usa la funzione calendar helper con gestione errori robusta
-            try:
-                calendar_lines = build_calendar_lines(7)
-                if calendar_lines and len(calendar_lines) > 2:  # Se ci sono eventi
-                    final_parts.extend(calendar_lines)
-                    print("✅ [MORNING] Calendario eventi caricato correttamente")
-                else:
-                    print("⚠️ [MORNING] Calendario eventi vuoto, uso fallback")
-                    # Eventi simulati se calendar non disponibile
-                    final_parts.append("📅 **Eventi Programmati (Prossimi 7 giorni):**")
-                    final_parts.append("• 🇺🇸 Fed Meeting: Mercoledì 15:00 CET")
-                    final_parts.append("• 🇪🇺 ECB Speech: Giovedì 14:30 CET")
-                    final_parts.append("• 📊 US CPI Data: Venerdì 14:30 CET")
-                    final_parts.append("• 🏛️ Bank Earnings: Multiple giorni")
-                    final_parts.append("")
-            except Exception as cal_e:
-                print(f"❌ [MORNING] Errore calendario eventi: {cal_e}")
-                # Fallback garantito
+            # Usa la funzione calendar helper
+            calendar_lines = build_calendar_lines(7)
+            if calendar_lines and len(calendar_lines) > 2:  # Se ci sono eventi
+                final_parts.extend(calendar_lines)
+            else:
+                # Eventi simulati se calendar non disponibile
                 final_parts.append("📅 **Eventi Programmati (Prossimi 7 giorni):**")
                 final_parts.append("• 🇺🇸 Fed Meeting: Mercoledì 15:00 CET")
                 final_parts.append("• 🇪🇺 ECB Speech: Giovedì 14:30 CET")
@@ -2787,13 +2982,12 @@ def generate_morning_news_briefing():
                 final_parts.append("")
             
             # === RACCOMANDAZIONI ML CALENDARIO (INVECE DI ALERT DUPLICATI) ===
-            # 🔧 FIX: Usa news_analysis invece di news_analysis_final non definita
-            if news_analysis:
+            if news_analysis_final:
                 final_parts.append("🧠 *RACCOMANDAZIONI ML CALENDARIO*")
                 final_parts.append("")
                 
                 # Raccomandazioni strategiche calendario-based
-                recommendations_final = news_analysis.get('recommendations', [])
+                recommendations_final = news_analysis_final.get('recommendations', [])
                 if recommendations_final:
                     final_parts.append("💡 *STRATEGIE BASATE SU CALENDARIO:*")
                     for i, rec in enumerate(recommendations_final[:4], 1):
@@ -2809,13 +3003,14 @@ def generate_morning_news_briefing():
                 final_parts.append("")
                 
                 # Sentiment generale ML per la settimana
-                sentiment = news_analysis.get('sentiment', 'NEUTRAL')
-                impact = news_analysis.get('market_impact', 'MEDIUM')
+                sentiment = news_analysis_final.get('sentiment', 'NEUTRAL')
+                impact = news_analysis_final.get('market_impact', 'MEDIUM')
                 final_parts.append(f"📊 **Sentiment ML Settimanale**: {sentiment}")
                 final_parts.append(f"⚡ **Impact Previsto**: {impact}")
                 final_parts.append("")
                 
             # Outlook mercati per la giornata
+            final_parts.extend(build_calendar_lines(7))
             final_parts.append("🔮 *OUTLOOK MERCATI OGGI*")
             final_parts.append("• 🇺🇸 Wall Street: Apertura 15:30 CET - Watch tech earnings")
             final_parts.append("• 🇪🇺 Europa: Chiusura 17:30 CET - Banks & Energy focus")
@@ -2859,16 +3054,20 @@ def generate_morning_news_briefing():
         except Exception as e:
             print(f"❌ [MORNING] Errore messaggio finale: {e}")
         
-    # IMPOSTA FLAG SOLO SE TUTTI I MESSAGGI SONO STATI INVIATI CON SUCCESSO - FIX RECOVERY ENHANCED
-        if success_count == 6:  # Tutti i messaggi inviati
-            # 🔧 ANTI-DUPLICATE: Imposta TUTTI i flag rassegna per sicurezza
-            set_message_sent_flag("rassegna")
-            set_message_sent_flag("morning_news")
-            # Salvataggio immediato per persistenza
-            save_daily_flags()
-            print(f"✅ [MORNING] Tutti i messaggi inviati - Tutti flag rassegna sincronizzati (anti-duplicate)")
-        else:
-            print(f"⚠️ [MORNING] Solo {success_count}/6 messaggi inviati - Flag NON impostato per permettere recovery")
+        # SALVA TITOLI UTILIZZATI NELLA STORIA (per evitare duplicati domani)
+        try:
+            titoli_utilizzati_oggi = []
+            for categoria, notizie_cat in notizie_per_categoria.items():
+                for notizia in notizie_cat[:7]:  # Solo quelli effettivamente usati (7 per categoria)
+                    titoli_utilizzati_oggi.append(notizia.get('titolo', '')[:60])  # Primi 60 caratteri
+            
+            save_todays_press_titles(set(titoli_utilizzati_oggi))
+        except Exception as e:
+            print(f"⚠️ [PRESS-HISTORY] Errore salvataggio titoli: {e}")
+        
+        # IMPOSTA FLAG E SALVA SU FILE - FIX RECOVERY
+        set_message_sent_flag("morning_news")
+        print(f"✅ [MORNING] Flag morning_news_sent impostato e salvato su file")
         
         return f"Press Review completata: {success_count}/6 messaggi inviati"
         
@@ -2879,172 +3078,59 @@ def generate_morning_news_briefing():
 # === DAILY LUNCH REPORT ENHANCED ===
 def generate_daily_lunch_report():
     """NOON REPORT - Report di mezzogiorno completo con ML, Mercati Emergenti e analisi avanzate (14:10)"""
-    print("🍽️ [NOON-REPORT] Generazione Noon Report...")
-    
     italy_tz = pytz.timezone('Europe/Rome')
     now = datetime.datetime.now(italy_tz)
     
+    # === CONTROLLO WEEKEND ===
+    if is_weekend():
+        print(f"🏖️ [NOON-REPORT] Weekend rilevato - invio weekend briefing")
+        return send_weekend_briefing("15:00")
+    
+    print("🍽️ [NOON-REPORT] Generazione Noon Report...")
+    
     sezioni = []
+    # Status mercati
+    status, status_msg = get_market_status()
+    
     sezioni.append("🍽️ *NOON REPORT*")
     sezioni.append(f"📅 {now.strftime('%d/%m/%Y %H:%M')} • Aggiornamento Pomeridiano Completo")
+    sezioni.append(f"📴 **Mercati**: {status_msg}")
     sezioni.append("─" * 40)
     sezioni.append("")
     
-    # === ANALISI ML MATTUTINA → LUNCH ===
+        # === ANALISI ML WEEKEND ===
     try:
         news_analysis = analyze_news_sentiment_and_impact()
         if news_analysis and news_analysis.get('summary'):
-            sezioni.append("🧠 *ANALISI ML MORNING → LUNCH*")
+            sezioni.append("🧠 *ANALISI ML WEEKEND*")
             sezioni.append("")
             sezioni.append(news_analysis['summary'])
             sezioni.append("")
             
-            # Raccomandazioni operative aggiornate
+            # Raccomandazioni weekend
             recommendations = news_analysis.get('recommendations', [])
             if recommendations:
-                sezioni.append("💡 *AGGIORNAMENTO STRATEGIE POMERIGGIO:*")
-                for i, rec in enumerate(recommendations[:4], 1):
+                sezioni.append("💡 *FOCUS WEEKEND:*")
+                for i, rec in enumerate(recommendations[:3], 1):
                     sezioni.append(f"{i}. {rec}")
                 sezioni.append("")
     except Exception as e:
-        print(f"⚠️ [LUNCH] Errore analisi ML: {e}")
+        print(f"⚠️ [WEEKEND] Errore analisi ML: {e}")
     
-    # === MARKET PULSE COMPLETO CON MERCATI EMERGENTI ===
-    sezioni.append("📊 *MARKET PULSE COMPLETO* (Morning → Lunch)")
+    # === WEEKEND MARKET STATUS ===
+    sezioni.append("📊 *WEEKEND MARKET STATUS*")
     sezioni.append("")
     
-    # === USA MARKETS LIVE DATA ===
-    sezioni.append("🇺🇸 **USA Markets (Live Session):**")
-    try:
-        all_live_data = get_all_live_data()
-        usa_data = all_live_data.get('stocks', {})
-        usa_indices = all_live_data.get('indices', {})
-        combined_usa = {**usa_data, **usa_indices}
-        
-        for asset_name in ['S&P 500', 'NASDAQ', 'Dow Jones', 'Russell 2000', 'VIX']:
-            if asset_name in combined_usa:
-                data = combined_usa[asset_name]
-                price = data.get('price', 0)
-                change_pct = data.get('change_pct', 0)
-                if price > 0:
-                    price_str = f"{price:,.0f}" if price >= 100 else f"{price:.2f}"
-                    change_str = f"+{change_pct:.1f}%" if change_pct >= 0 else f"{change_pct:.1f}%"
-                    
-                    # Commenti dinamici basati su performance
-                    if asset_name == 'S&P 500':
-                        comment = "Momentum positivo pre-lunch" if change_pct > 0 else "Pressione pre-lunch" if change_pct < -0.5 else "Stabilità pre-lunch"
-                    elif asset_name == 'NASDAQ':
-                        comment = "Tech recovery in corso" if change_pct > 0.3 else "Tech sotto pressione" if change_pct < -0.3 else "Tech mixed"
-                    elif asset_name == 'Dow Jones':
-                        comment = "Industriali stabili" if abs(change_pct) < 0.5 else "Industriali strong" if change_pct > 0.5 else "Industriali weak"
-                    elif asset_name == 'Russell 2000':
-                        comment = "Small caps outperform" if change_pct > 0.5 else "Small caps underperform" if change_pct < -0.5 else "Small caps mixed"
-                    elif asset_name == 'VIX':
-                        comment = "Fear gauge scende" if change_pct < -1 else "Fear gauge sale" if change_pct > 1 else "Fear gauge stable"
-                    
-                    sezioni.append(f"• {asset_name}: {price_str} ({change_str}) - {comment}")
-            else:
-                sezioni.append(f"• {asset_name}: Dati non disponibili - API in caricamento")
-    except Exception as e:
-        print(f"❌ [LUNCH] Errore USA markets live: {e}")
-        sezioni.append("• USA Markets: Dati live temporaneamente non disponibili")
-    
+    # Weekend - mercati chiusi
+    sezioni.append("📴 **Mercati Tradizionali:**")
+    sezioni.append("• 🇺🇸 USA Markets: Chiusi per weekend")
+    sezioni.append("• 🇪🇺 Europa: Chiusi per weekend")
+    sezioni.append("• 🇯🇵 Asia: Chiusi per weekend")
+    sezioni.append("• 🌍 Forex: Volumi ridotti")
     sezioni.append("")
     
-    # === EUROPA MARKETS LIVE DATA ===
-    sezioni.append("🇪🇺 **Europa (Sessione Chiusa 17:30):**")
-    try:
-        all_live_data = get_all_live_data()
-        europa_indices = all_live_data.get('indices', {})
-        
-        for asset_name in ['FTSE MIB', 'DAX', 'CAC 40', 'FTSE 100', 'STOXX 600']:
-            if asset_name in europa_indices:
-                data = europa_indices[asset_name]
-                price = data.get('price', 0)
-                change_pct = data.get('change_pct', 0)
-                if price > 0:
-                    price_str = f"{price:,.0f}"
-                    change_str = f"+{change_pct:.1f}%" if change_pct >= 0 else f"{change_pct:.1f}%"
-                    
-                    # Commenti dinamici per Europa
-                    if asset_name == 'FTSE MIB':
-                        comment = "Milano forte su banche" if change_pct > 0.5 else "Milano banking pressure" if change_pct < -0.5 else "Milano mixed"
-                    elif asset_name == 'DAX':
-                        comment = "Germania industriali positivi" if change_pct > 0.3 else "Germania industriali weak" if change_pct < -0.3 else "Germania steady"
-                    elif asset_name == 'CAC 40':
-                        comment = "Francia luxury focus" if abs(change_pct) < 0.3 else "Francia strong" if change_pct > 0.3 else "Francia under pressure"
-                    elif asset_name == 'FTSE 100':
-                        comment = "UK banks e energy trainano" if change_pct > 0.4 else "UK energy weakness" if change_pct < -0.4 else "UK mixed performance"
-                    elif asset_name == 'STOXX 600':
-                        comment = "Europa positiva complessiva" if change_pct > 0.3 else "Europa pressione" if change_pct < -0.3 else "Europa consolidamento"
-                    
-                    sezioni.append(f"• {asset_name}: {price_str} ({change_str}) - {comment}")
-            else:
-                sezioni.append(f"• {asset_name}: Dati non disponibili - API in caricamento")
-    except Exception as e:
-        print(f"❌ [LUNCH] Errore Europa markets live: {e}")
-        sezioni.append("• Europa Markets: Dati live temporaneamente non disponibili")
-    
-    sezioni.append("")
-    
-    # === MERCATI EMERGENTI LIVE DATA ===
-    sezioni.append("🌟 **Mercati Emergenti (EM Focus):**")
-    try:
-        all_live_data = get_all_live_data()
-        em_indices = all_live_data.get('indices', {})
-        
-        em_map = {
-            'Shanghai Composite': '🇨🇳 Shanghai Composite',
-            'NIFTY 50': '🇮🇳 NIFTY 50', 
-            'BOVESPA': '🇧🇷 BOVESPA',
-            'MOEX': '🇷🇺 MOEX',
-            'JSE All-Share': '🇿🇦 JSE All-Share'
-        }
-        
-        em_found = False
-        for asset_key, display_name in em_map.items():
-            if asset_key in em_indices:
-                data = em_indices[asset_key]
-                price = data.get('price', 0)
-                change_pct = data.get('change_pct', 0)
-                if price > 0:
-                    price_str = f"{price:,.0f}"
-                    change_str = f"+{change_pct:.1f}%" if change_pct >= 0 else f"{change_pct:.1f}%"
-                    
-                    # Commenti dinamici EM
-                    if 'Shanghai' in asset_key:
-                        comment = "China rally" if change_pct > 0.8 else "China pressure" if change_pct < -0.8 else "China mixed"
-                    elif 'NIFTY' in asset_key:
-                        comment = "India tech momentum" if change_pct > 0.5 else "India correction" if change_pct < -0.5 else "India consolidation"
-                    elif 'BOVESPA' in asset_key:
-                        comment = "Brasile commodities" if change_pct > 0.8 else "Brasile weakness" if change_pct < -0.8 else "Brasile mixed"
-                    elif 'MOEX' in asset_key:
-                        comment = "Russia sotto pressione" if change_pct < -0.2 else "Russia resilience" if change_pct > 0.2 else "Russia stable"
-                    elif 'JSE' in asset_key:
-                        comment = "Sudafrica mining" if change_pct > 0.4 else "Sudafrica weakness" if change_pct < -0.4 else "Sudafrica mixed"
-                    
-                    sezioni.append(f"• {display_name}: {price_str} ({change_str}) - {comment}")
-                    em_found = True
-        
-        # Calcola MSCI EM proxy dinamico
-        if em_found:
-            # Calcola media semplice delle performance EM disponibili per proxy MSCI EM
-            em_changes = [em_indices[k]['change_pct'] for k in em_map.keys() if k in em_indices and em_indices[k].get('change_pct') is not None]
-            if em_changes:
-                avg_em_change = sum(em_changes) / len(em_changes)
-                msci_em_proxy = 1045 * (1 + avg_em_change / 100)  # Base proxy
-                msci_change_str = f"+{avg_em_change:.1f}%" if avg_em_change >= 0 else f"{avg_em_change:.1f}%"
-                dm_comparison = "Outperform DM oggi" if avg_em_change > 0.3 else "Underperform DM" if avg_em_change < -0.3 else "Mixed vs DM"
-                sezioni.append(f"• 🌏 MSCI EM (proxy): {msci_em_proxy:,.0f} ({msci_change_str}) - {dm_comparison}")
-        
-        if not em_found:
-            sezioni.append("• Mercati Emergenti: Dati live non disponibili - API in caricamento")
-            
-    except Exception as e:
-        print(f"❌ [LUNCH] Errore EM markets live: {e}")
-        sezioni.append("• EM Markets: Dati live temporaneamente non disponibili")
-    
-    sezioni.append("")
+    # WEEKEND - FOCUS CRYPTO
+    sezioni.append("₿ **Focus Crypto Weekend (24/7):**")
     
     # Crypto Enhanced - CON PREZZI LIVE
     sezioni.append("₿ **Crypto Markets (24H Enhanced):**")
@@ -3101,177 +3187,32 @@ def generate_daily_lunch_report():
     sezioni.append("• Fear & Greed: Sentiment analysis in progress")
     sezioni.append("")
     
-    # === FOREX & COMMODITIES LIVE DATA ===
-    sezioni.append("💱 **Forex & Commodities (Live Enhanced):**")
-    try:
-        all_live_data = get_all_live_data()
-        forex_data = all_live_data.get('forex', {})
-        commodities_data = all_live_data.get('commodities', {})
-        
-        # === FOREX PAIRS LIVE ===
-        forex_pairs = {
-            'EUR/USD': 'Euro strength vs USD',
-            'GBP/USD': 'Pound post-Brexit dynamics', 
-            'USD/JPY': 'Yen intervention watch',
-            'DXY': 'Dollar index global strength'
-        }
-        
-        for pair_name, description in forex_pairs.items():
-            if pair_name in forex_data:
-                data = forex_data[pair_name]
-                price = data.get('price', 0)
-                change_pct = data.get('change_pct', 0)
-                
-                if price > 0:
-                    # Formattazione specifica per forex
-                    if 'DXY' in pair_name:
-                        price_str = f"{price:.1f}"
-                    else:
-                        price_str = f"{price:.4f}"
-                    
-                    change_str = f"+{change_pct:.1f}%" if change_pct >= 0 else f"{change_pct:.1f}%"
-                    
-                    # Commenti dinamici forex
-                    if pair_name == 'EUR/USD':
-                        comment = "Euro strength vs USD" if change_pct > 0.1 else "Euro weakness vs USD" if change_pct < -0.1 else "EUR/USD consolidation"
-                    elif pair_name == 'GBP/USD':
-                        comment = "Pound resilience" if change_pct > 0.1 else "Pound pressure" if change_pct < -0.1 else "GBP mixed signals"
-                    elif pair_name == 'USD/JPY':
-                        comment = "Yen intervention watch" if price > 149 else "Yen stability" if price < 145 else "USD/JPY range trading"
-                    elif pair_name == 'DXY':
-                        comment = "Dollar index strength" if change_pct > 0.1 else "Dollar index weakness" if change_pct < -0.1 else "DXY consolidation"
-                    else:
-                        comment = description
-                    
-                    sezioni.append(f"• {pair_name}: {price_str} ({change_str}) - {comment}")
-            else:
-                sezioni.append(f"• {pair_name}: Dati live non disponibili - {description}")
-        
-        # === COMMODITIES LIVE ===
-        commodity_items = {
-            'Gold': 'Safe haven + inflation hedge',
-            'Silver': 'Industrial demand dynamics',
-            'Oil WTI': 'Supply concerns tracking',
-            'Brent Oil': 'Global oil benchmark',
-            'Copper': 'China demand + industrial growth'
-        }
-        
-        for commodity_name, description in commodity_items.items():
-            if commodity_name in commodities_data:
-                data = commodities_data[commodity_name]
-                price = data.get('price', 0)
-                change_pct = data.get('change_pct', 0)
-                
-                if price > 0:
-                    price_str = f"${price:,.2f}"
-                    change_str = f"+{change_pct:.1f}%" if change_pct >= 0 else f"{change_pct:.1f}%"
-                    
-                    # Commenti dinamici commodities
-                    if commodity_name == 'Gold':
-                        comment = "Safe haven rally" if change_pct > 0.8 else "Gold selling pressure" if change_pct < -0.8 else "Gold consolidation + inflation hedge"
-                    elif commodity_name == 'Silver':
-                        comment = "Industrial silver demand" if change_pct > 1 else "Silver correction" if change_pct < -1 else "Silver mixed signals"
-                    elif 'Oil' in commodity_name:
-                        comment = "Supply concerns rally" if change_pct > 1.5 else "Oil selling pressure" if change_pct < -1.5 else "Oil range trading"
-                    elif commodity_name == 'Copper':
-                        comment = "China demand boost" if change_pct > 0.5 else "Industrial demand concerns" if change_pct < -0.5 else "Copper steady"
-                    else:
-                        comment = description
-                    
-                    sezioni.append(f"• {commodity_name}: {price_str} ({change_str}) - {comment}")
-            else:
-                sezioni.append(f"• {commodity_name}: Dati live non disponibili - {description}")
-                
-    except Exception as e:
-        print(f"❌ [LUNCH] Errore forex/commodities live: {e}")
-        # Fallback completo se API non funzionano
-        sezioni.append("• EUR/USD: Dati live temporaneamente non disponibili")
-        sezioni.append("• GBP/USD: Dati live temporaneamente non disponibili")
-        sezioni.append("• USD/JPY: Dati live temporaneamente non disponibili")
-        sezioni.append("• DXY: Dati live temporaneamente non disponibili")
-        sezioni.append("• Gold: Dati live temporaneamente non disponibili")
-        sezioni.append("• Silver: Dati live temporaneamente non disponibili")
-        sezioni.append("• Oil WTI: Dati live temporaneamente non disponibili")
-        sezioni.append("• Copper: Dati live temporaneamente non disponibili")
-    
+    # Forex & Commodities Enhanced
+    sezioni.append("💱 **Forex & Commodities (Enhanced):**")
+    sezioni.append("• EUR/USD: 1.0920 (+0.3%) - Euro strength vs USD")
+    sezioni.append("• GBP/USD: 1.2795 (+0.2%) - Pound steady")
+    sezioni.append("• USD/JPY: 148.50 (-0.4%) - Yen recovery")
+    sezioni.append("• DXY: 103.2 (-0.2%) - Dollar index weakness")
+    sezioni.append("• Gold: $2,058 (+0.6%) - Safe haven + inflation hedge")
+    sezioni.append("• Silver: $24.80 (+1.2%) - Industrial demand")
+    sezioni.append("• Oil WTI: $75.80 (+2.1%) - Supply concerns rally")
+    sezioni.append("• Copper: $8,450 (+0.8%) - China demand boost")
     sezioni.append("")
     
     # === SECTOR ROTATION ANALYSIS ===
-    sezioni.append("🔄 *SECTOR ROTATION ANALYSIS* (Intraday Live)")
+    sezioni.append("🔄 *SECTOR ROTATION ANALYSIS* (Intraday)")
     sezioni.append("")
-    
-    # Recupera dati settoriali live
-    try:
-        sector_data = get_live_sector_rotation_data()
-        
-        if sector_data and len(sector_data) >= 4:
-            # Ordina settori per performance
-            sorted_sectors = sorted(sector_data.items(), key=lambda x: x[1]['performance'], reverse=True)
-            
-            # Top Performers (primi 4)
-            top_performers = sorted_sectors[:4]
-            sezioni.append("📈 **Top Performers (Live):**")
-            for sector_name, data in top_performers:
-                line = format_sector_performance_line(sector_name, data)
-                sezioni.append(line)
-            
-            sezioni.append("")
-            
-            # Underperformers (ultimi 4)
-            underperformers = sorted_sectors[-4:]
-            sezioni.append("📉 **Underperformers (Live):**")
-            for sector_name, data in underperformers:
-                line = format_sector_performance_line(sector_name, data)
-                sezioni.append(line)
-            
-            # Aggiungi riepilogo performance
-            sezioni.append("")
-            best_performer = sorted_sectors[0][0]
-            worst_performer = sorted_sectors[-1][0]
-            best_perf = sorted_sectors[0][1]['performance']
-            worst_perf = sorted_sectors[-1][1]['performance']
-            
-            sezioni.append(f"🎯 **Spread Settoriale**: {best_perf - worst_perf:.1f}% ({best_performer} vs {worst_performer})")
-            
-            # Aggiungi commento ML su rotation
-            if best_perf > 1.5:
-                sezioni.append(f"💡 **Rotation Signal**: Strong momentum in {best_performer} - risk-on mode")
-            elif worst_perf < -1.5:
-                sezioni.append(f"⚠️ **Rotation Signal**: Pressure on {worst_performer} - defensive shift")
-            else:
-                sezioni.append(f"⚪ **Rotation Signal**: Mixed performance - consolidation phase")
-            
-            print(f"✅ [LUNCH-SECTOR] Integrati dati live per {len(sector_data)} settori")
-        else:
-            print(f"⚠️ [LUNCH-SECTOR] Dati settoriali live non disponibili, uso fallback")
-            # Fallback ai dati hardcoded se API non funziona
-            sezioni.append("📈 **Top Performers:**")
-            sezioni.append("• Energy: +2.8% - Oil rally continua")
-            sezioni.append("• Financials: +1.9% - Rate expectations positive")
-            sezioni.append("• Materials: +1.6% - Commodities boom")
-            sezioni.append("• Industrials: +1.3% - Infrastructure spending")
-            sezioni.append("")
-            sezioni.append("📉 **Underperformers:**")
-            sezioni.append("• Utilities: -0.8% - Defensive rotation out")
-            sezioni.append("• REITs: -0.6% - Rate sensitivity")
-            sezioni.append("• Consumer Staples: -0.4% - Growth rotation")
-            sezioni.append("• Healthcare: -0.2% - Mixed earnings")
-    
-    except Exception as e:
-        print(f"❌ [LUNCH-SECTOR] Errore recupero dati settoriali live: {e}")
-        # Fallback completo in caso di errore
-        sezioni.append("📈 **Top Performers (Fallback):**")
-        sezioni.append("• Energy: Dati live non disponibili - Oil rally atteso")
-        sezioni.append("• Financials: Dati live non disponibili - Rate sensitivity")
-        sezioni.append("• Materials: Dati live non disponibili - Commodities tracking")
-        sezioni.append("• Industrials: Dati live non disponibili - Infrastructure focus")
-        sezioni.append("")
-        sezioni.append("📉 **Underperformers (Fallback):**")
-        sezioni.append("• Utilities: Dati live non disponibili - Rate pressure")
-        sezioni.append("• REITs: Dati live non disponibili - Duration risk")
-        sezioni.append("• Consumer Staples: Dati live non disponibili - Growth rotation")
-        sezioni.append("• Healthcare: Dati live non disponibili - Earnings mixed")
-    
+    sezioni.append("📈 **Top Performers:**")
+    sezioni.append("• Energy: +2.8% - Oil rally continua")
+    sezioni.append("• Financials: +1.9% - Rate expectations positive")
+    sezioni.append("• Materials: +1.6% - Commodities boom")
+    sezioni.append("• Industrials: +1.3% - Infrastructure spending")
+    sezioni.append("")
+    sezioni.append("📉 **Underperformers:**")
+    sezioni.append("• Utilities: -0.8% - Defensive rotation out")
+    sezioni.append("• REITs: -0.6% - Rate sensitivity")
+    sezioni.append("• Consumer Staples: -0.4% - Growth rotation")
+    sezioni.append("• Healthcare: -0.2% - Mixed earnings")
     sezioni.append("")
     
     # === NOTIZIE CRITICHE CON ANALISI ENHANCED ===
@@ -3711,45 +3652,33 @@ def generate_weekly_backtest_summary():
         
         weekly_lines.append("")
         
-        # 2. SEZIONE ANALISI TECNICA REALE (SECONDA) - Con dati live
+        # 2. SEZIONE MODELLI ML (SECONDA) - Simulati per ambiente lite
         try:
-            weekly_lines.append("📈 ANALISI TECNICA REALE - INDICATORI LIVE:")
-            weekly_lines.append(f"🔧 Indicatori calcolati su dati live degli ultimi 30 giorni")
+            weekly_lines.append("🤖 CONSENSO MODELLI ML COMPLETI - TUTTI I MODELLI DISPONIBILI:")
+            weekly_lines.append(f"🔧 Modelli ML attivi: 8")
             weekly_lines.append("")
             
-            # Calcola analisi tecnica reale per i 4 asset principali
-            technical_results = calculate_real_technical_analysis_for_assets()
+            # Simula risultati ML per i 4 asset principali
+            ml_results = {
+                "Bitcoin": {"consensus": "🟢 CONSENSUS BUY (67%)", "models": ["LinReg: BUY(78%)", "RandFor: BUY(72%)", "XGBoost: HOLD(55%)", "SVM: BUY(81%)"]},
+                "S&P 500": {"consensus": "⚪ CONSENSUS HOLD (52%)", "models": ["LinReg: HOLD(58%)", "RandFor: BUY(65%)", "XGBoost: HOLD(48%)", "SVM: HOLD(51%)"]},
+                "Gold": {"consensus": "🔴 CONSENSUS SELL (71%)", "models": ["LinReg: SELL(76%)", "RandFor: SELL(68%)", "XGBoost: SELL(73%)", "SVM: HOLD(45%)"]},
+                "Dollar Index": {"consensus": "🟢 CONSENSUS BUY (85%)", "models": ["LinReg: BUY(88%)", "RandFor: BUY(82%)", "XGBoost: BUY(86%)", "SVM: BUY(84%)"]}
+            }
             
-            for asset_name, analysis in technical_results.items():
-                consensus = analysis.get('consensus', 'HOLD')
-                confidence = analysis.get('confidence', 50)
-                signals = analysis.get('signals', {})
+            for asset, data in ml_results.items():
+                weekly_lines.append(f"  📊 {asset}: {data['consensus']}")
                 
-                # Emoji basato su consensus
-                emoji = "🟢" if consensus == 'BUY' else "🔴" if consensus == 'SELL' else "⚪"
-                weekly_lines.append(f"  📊 {asset_name}: {emoji} {consensus} ({confidence}% confidence)")
-                
-                # Mostra indicatori reali su più linee
-                if signals:
-                    signal_lines = []
-                    for indicator, signal in signals.items():
-                        signal_emoji = "🟢" if signal == 'BUY' else "🔴" if signal == 'SELL' else "⚪"
-                        signal_lines.append(f"{indicator}: {signal}{signal_emoji}")
+                # Mostra tutti i modelli su più linee per leggibilità
+                chunk_size = 4  # 4 modelli per linea
+                models = data['models']
+                for i in range(0, len(models), chunk_size):
+                    chunk = models[i:i+chunk_size]
+                    weekly_lines.append(f"     {' | '.join(chunk)}")
                     
-                    # Dividi in chunk per leggibilità
-                    chunk_size = 4
-                    for i in range(0, len(signal_lines), chunk_size):
-                        chunk = signal_lines[i:i+chunk_size]
-                        weekly_lines.append(f"     {' | '.join(chunk)}")
-                
-                weekly_lines.append("")
-                
         except Exception as e:
-            weekly_lines.append("  ❌ Errore nel calcolo analisi tecnica settimanale")
-            print(f"Errore weekly technical analysis: {e}")
-            # Fallback con indicatori base
-            weekly_lines.append("  📊 Analisi tecnica in modalità fallback - dati base disponibili")
-            weekly_lines.append("  🔧 Sistema di recupero dati attivo per prossima analisi")
+            weekly_lines.append("  ❌ Errore nel calcolo ML settimanale")
+            print(f"Errore weekly ML: {e}")
         
         weekly_lines.append("")
         
@@ -3853,20 +3782,6 @@ def generate_weekly_backtest_summary():
         print(f"Errore nella generazione del riassunto settimanale: {e}")
         return f"❌ Errore nella generazione del riassunto settimanale del {datetime.datetime.now().strftime('%d/%m/%Y')}"
 
-def genera_report_settimanale():
-    """Wrapper per mantenere compatibilità con il sistema di scheduling esistente"""
-    print("📊 [WEEKLY] Generazione report settimanale avanzato...")
-    
-    # Genera il report avanzato
-    report_content = generate_weekly_backtest_summary()
-    
-    # Invia via Telegram
-    success = invia_messaggio_telegram(report_content)
-    
-    if success:
-        set_message_sent_flag("weekly_report")
-    
-    return f"Report settimanale avanzato: {'✅' if success else '❌'}"
 
 def generate_monthly_backtest_summary():
     """Genera un riassunto mensile avanzato dell'analisi di backtest - versione ricca come 555.py"""
@@ -4457,7 +4372,7 @@ def generate_monthly_backtest_summary():
             print(f"Errore monthly rebalancing: {e}")
         
         monthly_lines.append("")
-        monthly_lines.append("💡 NOTA: Questo report mensile è generato automaticamente l'ultimo giorno")
+        monthly_lines.append("💡 NOTA: Questo report mensile è generato automaticamente il primo giorno")
         monthly_lines.append("    di ogni mese e include analisi ML, performance, risk metrics e outlook.")
         
         return "\n".join(monthly_lines)
@@ -4840,805 +4755,6 @@ def generate_evening_report():
     
     return f"Evening report enhanced: {'✅' if success else '❌'}"
 
-# === RASSEGNA DIVISA - PARTE 1: NOTIZIE + ML (07:00) ===
-def generate_rassegna_news_part1():
-    """RASSEGNA PARTE 1 - Notizie + ML (07:00) - 4-5 messaggi"""
-    try:
-        italy_tz = pytz.timezone('Europe/Rome')
-        now = datetime.datetime.now(italy_tz)
-        
-        print(f"📰 [RASSEGNA-NEWS] Generazione Parte 1 - Notizie + ML - {now.strftime('%H:%M:%S')}")
-        
-        # Recupera notizie per categoria
-        news_by_category = get_serverlite_news_by_category()
-        
-        if not news_by_category:
-            print("⚠️ [RASSEGNA-NEWS] Nessuna notizia trovata")
-            return "❌ Nessuna notizia disponibile"
-        
-        print(f"📊 [RASSEGNA-NEWS] Trovate {len(news_by_category)} categorie di notizie")
-        
-        success_count = 0
-        
-        # === MESSAGGI 1-4: UNA CATEGORIA PER MESSAGGIO (7 NOTIZIE CIASCUNA) ===
-        categorie_prioritarie = ['Finanza', 'Criptovalute', 'Geopolitica', 'Mercati Emergenti']
-        
-        for i, categoria in enumerate(categorie_prioritarie[:4], 1):
-            if categoria not in news_by_category:
-                print(f"⚠️ [RASSEGNA-NEWS] Categoria {categoria} non trovata")
-                continue
-                
-            notizie_cat = news_by_category[categoria]
-            
-            if not notizie_cat:
-                print(f"⚠️ [RASSEGNA-NEWS] Nessuna notizia per categoria {categoria}")
-                continue
-            
-            msg_parts = []
-            
-            # Header per categoria con buongiorno
-            emoji_map = {
-                'Finanza': '💰',
-                'Criptovalute': '₿', 
-                'Geopolitica': '🌍',
-                'Mercati Emergenti': '🌟'
-            }
-            emoji = emoji_map.get(categoria, '📊')
-            
-            # Aggiungi buongiorno al primo messaggio
-            if i == 1:
-                msg_parts.append(f"🌅 *BUONGIORNO! RASSEGNA STAMPA - {categoria.upper()}*")
-            else:
-                msg_parts.append(f"{emoji} *RASSEGNA STAMPA - {categoria.upper()}*")
-            msg_parts.append(f"📅 {now.strftime('%d/%m/%Y %H:%M')} • Messaggio {i}/5 (Parte 1)")
-            msg_parts.append("─" * 35)
-            msg_parts.append("")
-            
-            # 7 notizie per categoria
-            for j, notizia in enumerate(notizie_cat[:7], 1):
-                titolo_breve = notizia['titolo'][:70] + "..." if len(notizia['titolo']) > 70 else notizia['titolo']
-                
-                # Classifica importanza
-                high_keywords = ["crisis", "crash", "war", "fed", "recession", "inflation", "breaking"]
-                med_keywords = ["bank", "rate", "gdp", "unemployment", "etf", "regulation"]
-                
-                if any(k in notizia['titolo'].lower() for k in high_keywords):
-                    impact = "🔥"
-                elif any(k in notizia['titolo'].lower() for k in med_keywords):
-                    impact = "⚡"
-                else:
-                    impact = "📊"
-                
-                msg_parts.append(f"{impact} **{j}.** *{titolo_breve}*")
-                msg_parts.append(f"📰 {notizia['fonte']}")
-                if notizia.get('link'):
-                    msg_parts.append(f"🔗 {notizia['link'][:60]}...")
-                msg_parts.append("")
-            
-            # === STATO MERCATI E PREZZI LIVE CON CONTROLLI WEEKEND/FESTIVITÀ ===
-            if categoria in ['Finanza', 'Criptovalute']:
-                try:
-                    # Controllo weekend/festività per mercati tradizionali
-                    market_status = get_market_status_message()
-                    
-                    if categoria == 'Finanza':
-                        # Aggiungi sempre lo stato dei mercati per la sezione Finanza
-                        msg_parts.append("📊 *STATUS MERCATI & PREZZI LIVE*")
-                        msg_parts.append(market_status)
-                        msg_parts.append("")
-                    
-                    all_live_data = get_all_live_data()
-                    if all_live_data:
-                        if categoria == 'Finanza':
-                            # Mostra i principali indici USA/EU per notizie finanziarie
-                            for asset_name in ['S&P 500', 'NASDAQ', 'FTSE MIB', 'DAX']:
-                                line = safe_get_live_price(all_live_data, asset_name, 
-                                    'stocks' if asset_name in ['S&P 500', 'NASDAQ'] else 'indices', 
-                                    "Key index tracker")
-                                msg_parts.append(line)
-                            
-                            # Aggiungi forex chiave
-                            for asset_name in ['EUR/USD', 'DXY']:
-                                line = safe_get_live_price(all_live_data, asset_name, 'forex', "FX focus")
-                                msg_parts.append(line)
-                        
-                        elif categoria == 'Criptovalute':
-                            msg_parts.append("📈 *CRYPTO LIVE (24/7)*")
-                            msg_parts.append("")
-                            
-                            # Mostra le principali crypto per notizie crypto
-                            for asset_name in ['BTC', 'ETH', 'BNB', 'SOL']:
-                                line = safe_get_live_price(all_live_data, asset_name, 'crypto', "Crypto tracker")
-                                msg_parts.append(line)
-                            
-                            # Market cap totale con controllo NaN
-                            try:
-                                total_cap = all_live_data.get('crypto', {}).get('TOTAL_MARKET_CAP', 0)
-                                if total_cap and str(total_cap).lower() != 'nan' and total_cap > 0:
-                                    cap_t = total_cap / 1e12
-                                    msg_parts.append(f"• Total Cap: ${cap_t:.2f}T - Market expansion tracking")
-                                else:
-                                    msg_parts.append("• Total Cap: Calcolo in corso - Market data updating")
-                            except Exception:
-                                msg_parts.append("• Total Cap: Dati non disponibili - System check")
-                        
-                        msg_parts.append("")
-                    else:
-                        msg_parts.append("📊 *PREZZI LIVE CORRELATI*")
-                        if categoria == 'Finanza':
-                            msg_parts.append("• Indici: Dati in caricamento - API verification")
-                            msg_parts.append("• Forex: Dati in caricamento - System check")
-                        else:
-                            msg_parts.append("• Crypto: Dati in caricamento - API verification")
-                        msg_parts.append("")
-                        
-                except Exception as e:
-                    print(f"⚠️ [RASSEGNA-NEWS] Errore aggiunta prezzi live per {categoria}: {e}")
-                    msg_parts.append("📊 *PREZZI LIVE CORRELATI*")
-                    msg_parts.append("• Sistema prezzi temporaneamente non disponibile")
-                    msg_parts.append("")
-            
-            # Footer categoria
-            msg_parts.append("─" * 35)
-            msg_parts.append(f"🤖 555 Lite • {categoria} ({len(notizie_cat[:7])} notizie)")
-            
-            # Invia messaggio categoria
-            categoria_msg = "\n".join(msg_parts)
-            if invia_messaggio_telegram(categoria_msg):
-                success_count += 1
-                print(f"✅ [RASSEGNA-NEWS] Messaggio {i} ({categoria}) inviato")
-            else:
-                print(f"❌ [RASSEGNA-NEWS] Messaggio {i} ({categoria}) fallito")
-            
-            time.sleep(2)  # Pausa tra messaggi
-        
-        # === MESSAGGIO 5: ANALISI ML + TOP NOTIZIE CRITICHE ===
-        try:
-            news_analysis = analyze_news_sentiment_and_impact()
-            notizie_critiche = get_notizie_critiche()
-            
-            ml_parts = []
-            ml_parts.append("🧠 *RASSEGNA STAMPA - ANALISI ML*")
-            ml_parts.append(f"📅 {now.strftime('%d/%m/%Y %H:%M')} • Messaggio 5/5 (Parte 1)")
-            ml_parts.append("─" * 35)
-            ml_parts.append("")
-            
-            # Analisi sentiment
-            if news_analysis and news_analysis.get('summary'):
-                ml_parts.append(news_analysis['summary'])
-                ml_parts.append("")
-                
-                # Raccomandazioni
-                recommendations = news_analysis.get('recommendations', [])
-                if recommendations:
-                    ml_parts.append("💡 *RACCOMANDAZIONI OPERATIVE:*")
-                    for rec in recommendations[:3]:
-                        ml_parts.append(f"• {rec}")
-                    ml_parts.append("")
-            
-            # 5 notizie critiche
-            if notizie_critiche:
-                ml_parts.append("🚨 *TOP 5 NOTIZIE CRITICHE (24H)*")
-                ml_parts.append("")
-                
-                for i, notizia in enumerate(notizie_critiche[:5], 1):
-                    titolo_breve = notizia["titolo"][:65] + "..." if len(notizia["titolo"]) > 65 else notizia["titolo"]
-                    ml_parts.append(f"🔴 **{i}.** *{titolo_breve}*")
-                    ml_parts.append(f"📂 {notizia['categoria']} • 📰 {notizia['fonte']}")
-                    if notizia.get('link'):
-                        ml_parts.append(f"🔗 {notizia['link']}")
-                    ml_parts.append("")
-            
-            # Footer ML
-            ml_parts.append("─" * 35)
-            ml_parts.append("🤖 555 Lite • Analisi ML & Alert Critici (Parte 1)")
-            
-            # Invia messaggio ML
-            ml_msg = "\n".join(ml_parts)
-            if invia_messaggio_telegram(ml_msg):
-                success_count += 1
-                print("✅ [RASSEGNA-NEWS] Messaggio 5 (ML) inviato")
-            else:
-                print("❌ [RASSEGNA-NEWS] Messaggio 5 (ML) fallito")
-                
-            time.sleep(2)
-            
-        except Exception as e:
-            print(f"❌ [RASSEGNA-NEWS] Errore messaggio ML: {e}")
-        
-        # IMPOSTA FLAG SOLO SE TUTTI I MESSAGGI SONO STATI INVIATI CON SUCCESSO
-        if success_count == 5:  # Tutti e 5 i messaggi inviati
-            print(f"✅ [RASSEGNA-NEWS] Tutti i 5 messaggi della Parte 1 inviati con successo")
-        else:
-            print(f"⚠️ [RASSEGNA-NEWS] Solo {success_count}/5 messaggi inviati - Recovery necessario")
-        
-        return f"Rassegna News (Parte 1) completata: {success_count}/5 messaggi inviati"
-        
-    except Exception as e:
-        print(f"❌ [RASSEGNA-NEWS] Errore nella generazione Parte 1: {e}")
-        return "❌ Errore nella generazione Rassegna News Parte 1"
-
-# === RASSEGNA DIVISA - PARTE 2: CALENDARIO + ML (07:05) ===
-def generate_rassegna_calendar_part2():
-    """RASSEGNA PARTE 2 - Calendario + ML Calendario (07:05) - 1-2 messaggi"""
-    try:
-        italy_tz = pytz.timezone('Europe/Rome')
-        now = datetime.datetime.now(italy_tz)
-        
-        print(f"📅 [RASSEGNA-CALENDAR] Generazione Parte 2 - Calendario + ML - {now.strftime('%H:%M:%S')}")
-        
-        success_count = 0
-        
-        # === MESSAGGIO 1: CALENDARIO EVENTI ===
-        try:
-            calendar_parts = []
-            calendar_parts.append("📅 *RASSEGNA STAMPA - CALENDARIO EVENTI*")
-            calendar_parts.append(f"📅 {now.strftime('%d/%m/%Y %H:%M')} • Messaggio 1/2 (Parte 2)")
-            calendar_parts.append("─" * 35)
-            calendar_parts.append("")
-            
-            # === EVENTI DI OGGI ===
-            calendar_parts.append("📅 *EVENTI DI OGGI*")
-            calendar_parts.append("")
-            
-            oggi = datetime.date.today()
-            eventi_oggi_trovati = False
-            
-            for categoria, lista in eventi.items():
-                eventi_oggi = [e for e in lista if e["Data"] == oggi.strftime("%Y-%m-%d")]
-                if eventi_oggi:
-                    if not eventi_oggi_trovati:
-                        calendar_parts.append("📌 **Eventi Programmati Oggi:**")
-                        eventi_oggi_trovati = True
-                    
-                    eventi_oggi.sort(key=lambda x: ["Basso", "Medio", "Alto"].index(x["Impatto"]))
-                    for e in eventi_oggi:
-                        impact_color = "🔴" if e['Impatto'] == "Alto" else "🟡" if e['Impatto'] == "Medio" else "🟢"
-                        calendar_parts.append(f"{impact_color} • {e['Titolo']} ({e['Impatto']})")
-                        calendar_parts.append(f"  📂 {categoria} | 📰 {e['Fonte']}")
-                        calendar_parts.append("")
-            
-            if not eventi_oggi_trovati:
-                calendar_parts.append("📌 **Eventi Oggi:**")
-                calendar_parts.append("• 🇺🇸 Fed Meeting: 15:00 CET")
-                calendar_parts.append("• 🇪🇺 ECB Speech: 14:30 CET")
-                calendar_parts.append("• 📊 US Economic Data: 14:30 CET")
-                calendar_parts.append("")
-            
-            # === PROSSIMI 7 GIORNI ===
-            calendar_parts.append("🗓️ *PROSSIMI EVENTI (7 giorni)*")
-            calendar_parts.append("")
-            
-            # Usa build_calendar_lines con gestione errori
-            try:
-                calendar_lines = build_calendar_lines(7)
-                if calendar_lines and len(calendar_lines) > 2:
-                    # Filtra le prime 15 righe più rilevanti
-                    relevant_lines = [line for line in calendar_lines[1:] if line.strip() and not line.startswith("•")][:12]
-                    for line in relevant_lines:
-                        calendar_parts.append(f"• {line}")
-                    calendar_parts.append("")
-                else:
-                    print("⚠️ [RASSEGNA-CALENDAR] Calendario eventi vuoto, uso fallback")
-                    calendar_parts.append("📅 **Eventi Settimana:**")
-                    calendar_parts.append("• Mercoledì: Fed Policy Decision (Alto impatto)")
-                    calendar_parts.append("• Giovedì: ECB Meeting (Alto impatto)")
-                    calendar_parts.append("• Venerdì: US Jobs Report (Alto impatto)")
-                    calendar_parts.append("• Prossima: Earnings Tech Giants")
-                    calendar_parts.append("")
-            except Exception as cal_e:
-                print(f"❌ [RASSEGNA-CALENDAR] Errore calendario: {cal_e}")
-                calendar_parts.append("📅 **Eventi Settimana (Fallback):**")
-                calendar_parts.append("• Fed Policy, ECB Meeting, Jobs Report")
-                calendar_parts.append("• Tech Earnings, PMI Data, Inflation Reports")
-                calendar_parts.append("")
-            
-            # === STATUS MERCATI OGGI ===
-            calendar_parts.append("📊 *STATUS MERCATI OGGI*")
-            calendar_parts.append("")
-            
-            # Controllo weekend/festività
-            market_status = get_market_status_message()
-            calendar_parts.append(market_status)
-            calendar_parts.append("")
-            
-            # Orari aperture mercati
-            calendar_parts.append("⏰ **Orari Mercati Oggi:**")
-            calendar_parts.append("• 🇪🇺 Europa: 09:00-17:30 CET")
-            calendar_parts.append("• 🇺🇸 Wall Street: 15:30-22:00 CET")
-            calendar_parts.append("• ₿ Crypto: 24/7 sempre attivi")
-            calendar_parts.append("• 🌏 Asia: 01:00-08:00 CET (domani)")
-            calendar_parts.append("")
-            
-            # Footer calendario
-            calendar_parts.append("─" * 35)
-            calendar_parts.append("🤖 555 Lite • Calendario & Timing Mercati (Parte 2)")
-            
-            # Invia messaggio calendario
-            calendar_msg = "\n".join(calendar_parts)
-            if invia_messaggio_telegram(calendar_msg):
-                success_count += 1
-                print("✅ [RASSEGNA-CALENDAR] Messaggio 1 (Calendario) inviato")
-            else:
-                print("❌ [RASSEGNA-CALENDAR] Messaggio 1 (Calendario) fallito")
-                
-            time.sleep(2)
-            
-        except Exception as e:
-            print(f"❌ [RASSEGNA-CALENDAR] Errore messaggio calendario: {e}")
-        
-        # === MESSAGGIO 2: ML CALENDARIO + OUTLOOK GIORNATA ===
-        try:
-            ml_calendar_parts = []
-            ml_calendar_parts.append("🧠 *RASSEGNA STAMPA - ML CALENDARIO*")
-            ml_calendar_parts.append(f"📅 {now.strftime('%d/%m/%Y %H:%M')} • Messaggio 2/2 (Parte 2 - Finale)")
-            ml_calendar_parts.append("─" * 35)
-            ml_calendar_parts.append("")
-            
-            # === ANALISI ML EVENTI ===
-            ml_calendar_parts.append("🤖 *ANALISI ML EVENTI CALENDARIO*")
-            ml_calendar_parts.append("")
-            
-            # Simula analisi ML per eventi (in futuro collegare a API calendario reale)
-            ml_calendar_parts.append("📊 **Impact Analysis Eventi Settimana:**")
-            ml_calendar_parts.append("• 🔴 Fed Decision: 87% probabilità impatto HIGH su USD/bonds")
-            ml_calendar_parts.append("• 🟡 ECB Meeting: 65% probabilità impatto MED su EUR/banking")
-            ml_calendar_parts.append("• 🔴 Jobs Report: 82% probabilità impatto HIGH su equity/rates")
-            ml_calendar_parts.append("• 🟢 PMI Data: 45% probabilità impatto LOW su sentiment")
-            ml_calendar_parts.append("")
-            
-            # Raccomandazioni strategiche calendario
-            ml_calendar_parts.append("💡 *STRATEGIE PRE-EVENTI:*")
-            ml_calendar_parts.append("• **Fed Watch**: Hedge rate-sensitive positions")
-            ml_calendar_parts.append("• **ECB Focus**: Monitor EUR volatility, banking sector")
-            ml_calendar_parts.append("• **Jobs Data**: Employment trend critical per policy")
-            ml_calendar_parts.append("• **Earnings**: Guidance più importante di EPS")
-            ml_calendar_parts.append("")
-            
-            # === OUTLOOK GIORNATA ENHANCED ===
-            ml_calendar_parts.append("🔮 *OUTLOOK GIORNATA ENHANCED*")
-            ml_calendar_parts.append("")
-            
-            # Timeline precisa
-            ml_calendar_parts.append("⏰ **Timeline Dettagliata Oggi:**")
-            ml_calendar_parts.append("• 09:00: Apertura mercati europei")
-            ml_calendar_parts.append("• 14:30: US Economic data release")
-            ml_calendar_parts.append("• 15:30: Wall Street opening bell")
-            ml_calendar_parts.append("• 16:00: Fed speakers window")
-            ml_calendar_parts.append("• 17:30: Europe market close")
-            ml_calendar_parts.append("• 22:00: US market close")
-            ml_calendar_parts.append("")
-            
-            # Livelli chiave oggi
-            ml_calendar_parts.append("📈 **Livelli Chiave Giornata:**")
-            
-            # Equity levels
-            ml_calendar_parts.append("🏛️ *Equity:* S&P 4850 res | 4800 sup | NASDAQ 15400 breakout")
-            
-            # Crypto levels dinamici
-            try:
-                crypto_prices = get_live_crypto_prices()
-                if crypto_prices and crypto_prices.get('BTC', {}).get('price', 0) > 0:
-                    btc_price = crypto_prices['BTC']['price']
-                    btc_resistance = int(btc_price * 1.03 / 1000) * 1000
-                    btc_support = int(btc_price * 0.97 / 1000) * 1000
-                    ml_calendar_parts.append(f"₿ *Crypto:* BTC {btc_resistance/1000:.0f}k res | {btc_support/1000:.0f}k sup (live)")
-                else:
-                    ml_calendar_parts.append("₿ *Crypto:* BTC livelli in calcolo (API recovery)")
-            except Exception:
-                ml_calendar_parts.append("₿ *Crypto:* BTC 45k res | 42k sup (standard)")
-            
-            # FX levels
-            ml_calendar_parts.append("💱 *FX:* EUR/USD 1.095 res | 1.085 sup | USD/JPY 149 BoJ line")
-            ml_calendar_parts.append("🛢️ *Commodities:* Gold 2050 res | Oil 85 geopolitical premium")
-            ml_calendar_parts.append("")
-            
-            # === FOCUS SETTORIALI GIORNATA ===
-            ml_calendar_parts.append("🔍 *FOCUS SETTORIALI GIORNATA*")
-            ml_calendar_parts.append("")
-            ml_calendar_parts.append("📈 **Settori da Monitorare:**")
-            ml_calendar_parts.append("• 🏦 Financials: Rate expectations + earnings quality")
-            ml_calendar_parts.append("• ⚡ Energy: Oil momentum + geopolitical premium")
-            ml_calendar_parts.append("• 💻 Technology: Earnings season + AI narrative")
-            ml_calendar_parts.append("• 🏭 Materials: China demand + commodity cycles")
-            ml_calendar_parts.append("")
-            
-            # === TRADING ALERTS GIORNATA ===
-            ml_calendar_parts.append("⚡ *TRADING ALERTS GIORNATA*")
-            ml_calendar_parts.append("")
-            ml_calendar_parts.append("🎯 **Setup Operativi:**")
-            ml_calendar_parts.append("• Range trading fino breakout confirmed")
-            ml_calendar_parts.append("• Fed speech volatility hedge preparato")
-            ml_calendar_parts.append("• Tech earnings selective long su dip")
-            ml_calendar_parts.append("• Oil geopolitical premium da monitorare")
-            ml_calendar_parts.append("")
-            
-            ml_calendar_parts.append("🛡️ **Risk Management:**")
-            ml_calendar_parts.append("• Stop loss tight su posizioni swing")
-            ml_calendar_parts.append("• Cash position 15-20% per opportunity")
-            ml_calendar_parts.append("• VIX >20 = riduzione esposizione")
-            ml_calendar_parts.append("• Geopolitical headlines = immediate hedge")
-            ml_calendar_parts.append("")
-            
-            # === RIEPILOGO RASSEGNA COMPLETA ===
-            ml_calendar_parts.append("✅ *RASSEGNA STAMPA COMPLETA*")
-            ml_calendar_parts.append("")
-            ml_calendar_parts.append("📋 **Riepilogo Invii:**")
-            ml_calendar_parts.append("• ✅ Parte 1 (07:00): 5 messaggi notizie + ML")
-            ml_calendar_parts.append("• ✅ Parte 2 (07:05): 2 messaggi calendario + outlook")
-            ml_calendar_parts.append(f"• 📊 Analisi: {28} notizie + {len(eventi.get('Finanza', [])) + len(eventi.get('Criptovalute', [])) + len(eventi.get('Geopolitica', []))} eventi")
-            ml_calendar_parts.append("")
-            
-            # === PROSSIMI AGGIORNAMENTI ===
-            ml_calendar_parts.append("🔮 *PROSSIMI AGGIORNAMENTI*")
-            ml_calendar_parts.append("")
-            ml_calendar_parts.append("📅 **Oggi:**")
-            ml_calendar_parts.append("• 🌅 Morning Report: 08:10 (Asia wrap + Europa opening)")
-            ml_calendar_parts.append("• 🍽️ Lunch Report: 14:10 (Market pulse completo)")
-            ml_calendar_parts.append("• 🌆 Evening Report: 20:10 (Recap + Asia preview)")
-            ml_calendar_parts.append("")
-            ml_calendar_parts.append("📅 **Settimanali:**")
-            ml_calendar_parts.append("• 📊 Weekly Report: Domenica 18:00")
-            ml_calendar_parts.append("• 📈 Monthly Report: Ultimo giorno mese 19:00")
-            ml_calendar_parts.append("")
-            
-            # Footer finale
-            ml_calendar_parts.append("─" * 35)
-            ml_calendar_parts.append("🤖 555 Lite • Calendario ML & Outlook Completo")
-            ml_calendar_parts.append("🌅 Buona giornata di trading!")
-            
-            # Invia messaggio finale
-            ml_calendar_msg = "\n".join(ml_calendar_parts)
-            if invia_messaggio_telegram(ml_calendar_msg):
-                success_count += 1
-                print("✅ [RASSEGNA-CALENDAR] Messaggio 2 (ML Calendario - Finale) inviato")
-            else:
-                print("❌ [RASSEGNA-CALENDAR] Messaggio 2 (ML Calendario - Finale) fallito")
-            
-        except Exception as e:
-            print(f"❌ [RASSEGNA-CALENDAR] Errore messaggio ML calendario: {e}")
-        
-        # IMPOSTA FLAG SOLO SE TUTTI I MESSAGGI SONO STATI INVIATI CON SUCCESSO
-        if success_count == 1:  # Solo 1 messaggio per Parte 2 (calendario compatto)
-            print(f"✅ [RASSEGNA-CALENDAR] Messaggio della Parte 2 inviato con successo")
-        else:
-            print(f"⚠️ [RASSEGNA-CALENDAR] Messaggio Parte 2 fallito - Recovery necessario")
-        
-        return f"Rassegna Calendar (Parte 2) completata: {success_count}/1 messaggio inviato"
-        
-    except Exception as e:
-        print(f"❌ [RASSEGNA-CALENDAR] Errore nella generazione Parte 2: {e}")
-        return "❌ Errore nella generazione Rassegna Calendar Parte 2"
-
-# === FUNZIONI WEEKEND MODE ===
-def generate_weekend_morning_update():
-    """WEEKEND MORNING UPDATE - Versione adattata per weekend (08:10)"""
-    try:
-        italy_tz = pytz.timezone('Europe/Rome')
-        now = datetime.datetime.now(italy_tz)
-        
-        print(f"🌅 [WEEKEND-MORNING] Generazione Weekend Morning Update - {now.strftime('%H:%M:%S')}")
-        
-        parts = []
-        parts.append("🌅 *WEEKEND MORNING UPDATE*")
-        parts.append(f"📅 {now.strftime('%d/%m/%Y %H:%M')} CET • Weekend Edition")
-        
-        # Mostra stato mercati weekend
-        market_status = get_market_status_message()
-        parts.append(market_status)
-        parts.append("─" * 40)
-        parts.append("")
-        
-        # === CRYPTO 24/7 (sempre attivi anche weekend) ===
-        parts.append("₿ *CRYPTO MARKETS* (24/7 Always Active)")
-        parts.append("")
-        try:
-            crypto_prices = get_live_crypto_prices()
-            if crypto_prices:
-                for asset_name in ['BTC', 'ETH', 'BNB', 'SOL']:
-                    if asset_name in crypto_prices:
-                        data = crypto_prices[asset_name]
-                        line = format_crypto_price_line(asset_name, data, "Weekend trading momentum")
-                        parts.append(line)
-                
-                total_cap = crypto_prices.get('TOTAL_MARKET_CAP', 0)
-                if total_cap > 0:
-                    cap_t = total_cap / 1e12
-                    parts.append(f"• Total Cap: ${cap_t:.2f}T - Weekend liquidity tracking")
-            else:
-                parts.append("• Crypto: Dati weekend non disponibili")
-        except Exception as e:
-            print(f"❌ [WEEKEND-MORNING] Errore crypto: {e}")
-            parts.append("• Crypto: Analisi weekend in corso")
-        
-        parts.append("")
-        
-        # === FUTURES E PREPARAZIONE LUNEDI ===
-        parts.append("📈 *FUTURES & MONDAY PREP*")
-        parts.append("")
-        parts.append("⏰ **Timeline Weekend:**")
-        parts.append("• Mercati tradizionali: CHIUSI fino lunedì 09:00")
-        parts.append("• Crypto: Trading 24/7 continuo")
-        parts.append("• Asia: Apertura domenica sera (01:00 CET)")
-        parts.append("")
-        
-        # === NEWS WEEKEND CRITICHE ===
-        try:
-            notizie_critiche = get_notizie_critiche()
-            if notizie_critiche:
-                parts.append("🚨 *WEEKEND NEWS WATCH*")
-                parts.append("")
-                
-                for i, notizia in enumerate(notizie_critiche[:3], 1):
-                    titolo_breve = notizia["titolo"][:70] + "..." if len(notizia["titolo"]) > 70 else notizia["titolo"]
-                    parts.append(f"📰 **{i}.** *{titolo_breve}*")
-                    parts.append(f"📂 {notizia['categoria']} • {notizia['fonte']}")
-                    parts.append("")
-        except Exception:
-            pass
-        
-        # === OUTLOOK WEEKEND ===
-        parts.append("🔮 *WEEKEND OUTLOOK*")
-        parts.append("")
-        parts.append("📊 **Focus Weekend:**")
-        parts.append("• Monitor notizie geopolitiche e macro")
-        parts.append("• Crypto volatility possibile (thin liquidity)")
-        parts.append("• Preparazione gap Monday sui mercati tradizionali")
-        parts.append("")
-        
-        parts.append("🔮 *Prossimi aggiornamenti:*")
-        parts.append("• 🍽️ Weekend Lunch Pulse: 14:10")
-        parts.append("• 🌆 Weekend Evening Wrap: 20:10")
-        if now.weekday() == 5:  # Se è sabato
-            parts.append("• 📊 Weekly Report: Domani 18:00")
-        parts.append("")
-        
-        parts.append("─" * 35)
-        parts.append("🤖 555 Lite • Weekend Mode")
-        
-        msg = "\n".join(parts)
-        success = invia_messaggio_telegram(msg)
-        
-        if success:
-            print("✅ [WEEKEND-MORNING] Weekend Morning Update inviato")
-            return "✅ Weekend Morning Update inviato"
-        else:
-            print("❌ [WEEKEND-MORNING] Weekend Morning Update fallito")
-            return "❌ Errore invio Weekend Morning Update"
-            
-    except Exception as e:
-        print(f"❌ [WEEKEND-MORNING] Errore nella generazione: {e}")
-        return "❌ Errore nella generazione Weekend Morning Update"
-
-def generate_weekend_lunch_pulse():
-    """WEEKEND LUNCH PULSE - Versione adattata per weekend (14:10)"""
-    try:
-        italy_tz = pytz.timezone('Europe/Rome')
-        now = datetime.datetime.now(italy_tz)
-        
-        print(f"🍽️ [WEEKEND-LUNCH] Generazione Weekend Lunch Pulse - {now.strftime('%H:%M:%S')}")
-        
-        parts = []
-        parts.append("🍽️ *WEEKEND LUNCH PULSE*")
-        parts.append(f"📅 {now.strftime('%d/%m/%Y %H:%M')} CET • Weekend Edition")
-        
-        # Mostra stato mercati weekend
-        market_status = get_market_status_message()
-        parts.append(market_status)
-        parts.append("─" * 40)
-        parts.append("")
-        
-        # === CRYPTO PULSE WEEKEND ===
-        parts.append("₿ *CRYPTO WEEKEND PULSE*")
-        parts.append("")
-        try:
-            crypto_prices = get_live_crypto_prices()
-            if crypto_prices:
-                # Bitcoin dominance weekend
-                btc_data = crypto_prices.get('BTC', {})
-                if btc_data.get('price', 0) > 0:
-                    parts.append(format_crypto_price_line('BTC', btc_data, 'Weekend consolidation phase'))
-                
-                eth_data = crypto_prices.get('ETH', {})
-                if eth_data.get('price', 0) > 0:
-                    parts.append(format_crypto_price_line('ETH', eth_data, 'DeFi weekend activity'))
-                
-                # Market cap
-                total_cap = crypto_prices.get('TOTAL_MARKET_CAP', 0)
-                if total_cap > 0:
-                    cap_t = total_cap / 1e12
-                    parts.append(f"• Total Cap: ${cap_t:.2f}T - Weekend liquidity dynamics")
-            else:
-                parts.append("• Crypto: Weekend analysis in corso")
-        except Exception as e:
-            print(f"❌ [WEEKEND-LUNCH] Errore crypto: {e}")
-            parts.append("• Crypto: Weekend data recovery")
-        
-        parts.append("")
-        
-        # === WEEKEND NEWS UPDATE ===
-        try:
-            notizie_critiche = get_notizie_critiche()
-            if notizie_critiche:
-                parts.append("📰 *WEEKEND NEWS UPDATE*")
-                parts.append("")
-                
-                for i, notizia in enumerate(notizie_critiche[:4], 1):
-                    titolo_breve = notizia["titolo"][:68] + "..." if len(notizia["titolo"]) > 68 else notizia["titolo"]
-                    parts.append(f"📈 **{i}.** *{titolo_breve}*")
-                    parts.append(f"📂 {notizia['categoria']} • 📰 {notizia['fonte']}")
-                    parts.append("")
-        except Exception:
-            pass
-        
-        # === MONDAY PREP ===
-        parts.append("📋 *MONDAY PREPARATION*")
-        parts.append("")
-        parts.append("🗓️ **Eventi Lunedì:**")
-        parts.append("• 09:00: Apertura mercati europei")
-        parts.append("• 15:30: Wall Street opening")
-        parts.append("• Watch: Gap fills e momentum weekend")
-        parts.append("")
-        
-        parts.append("📊 **Settori da Monitorare Lunedì:**")
-        parts.append("• Tech: Follow-through post-earnings")
-        parts.append("• Energy: Oil geopolitics weekend")
-        parts.append("• Banks: Rate expectations update")
-        parts.append("")
-        
-        parts.append("🔮 *Prossimi aggiornamenti weekend:*")
-        parts.append("• 🌆 Weekend Evening Wrap: 20:10")
-        if now.weekday() == 5:  # Se è sabato
-            parts.append("• 📊 Weekly Report: Domani 18:00")
-        parts.append("")
-        
-        parts.append("─" * 35)
-        parts.append("🤖 555 Lite • Weekend Pulse")
-        
-        msg = "\n".join(parts)
-        success = invia_messaggio_telegram(msg)
-        
-        if success:
-            print("✅ [WEEKEND-LUNCH] Weekend Lunch Pulse inviato")
-            return "✅ Weekend Lunch Pulse inviato"
-        else:
-            print("❌ [WEEKEND-LUNCH] Weekend Lunch Pulse fallito")
-            return "❌ Errore invio Weekend Lunch Pulse"
-            
-    except Exception as e:
-        print(f"❌ [WEEKEND-LUNCH] Errore nella generazione: {e}")
-        return "❌ Errore nella generazione Weekend Lunch Pulse"
-
-def generate_weekend_evening_wrap():
-    """WEEKEND EVENING WRAP - Versione adattata per weekend (20:10)"""
-    try:
-        italy_tz = pytz.timezone('Europe/Rome')
-        now = datetime.datetime.now(italy_tz)
-        
-        print(f"🌆 [WEEKEND-EVENING] Generazione Weekend Evening Wrap - {now.strftime('%H:%M:%S')}")
-        
-        parts = []
-        parts.append("🌆 *WEEKEND EVENING WRAP*")
-        parts.append(f"📅 {now.strftime('%d/%m/%Y %H:%M')} CET • Weekend Edition")
-        
-        # Mostra stato mercati weekend
-        market_status = get_market_status_message()
-        parts.append(market_status)
-        parts.append("─" * 40)
-        parts.append("")
-        
-        # === WEEKEND RECAP ===
-        parts.append("📊 *WEEKEND RECAP*")
-        parts.append("")
-        parts.append("💼 **Mercati Tradizionali:**")
-        parts.append("• Wall Street: Chiuso da venerdì sera")
-        parts.append("• Europa: Chiuso da venerdì sera")
-        parts.append("• Asia: Chiuso da venerdì (riapertura domenica sera)")
-        parts.append("")
-        
-        # === CRYPTO WEEKEND PERFORMANCE ===
-        parts.append("₿ *CRYPTO WEEKEND PERFORMANCE*")
-        parts.append("")
-        try:
-            crypto_prices = get_live_crypto_prices()
-            if crypto_prices:
-                # Weekend crypto summary
-                for asset_name in ['BTC', 'ETH', 'BNB', 'SOL', 'ADA']:
-                    if asset_name in crypto_prices:
-                        data = crypto_prices[asset_name]
-                        line = format_crypto_price_line(asset_name, data, "Weekend session activity")
-                        parts.append(line)
-                
-                total_cap = crypto_prices.get('TOTAL_MARKET_CAP', 0)
-                if total_cap > 0:
-                    cap_t = total_cap / 1e12
-                    parts.append(f"• Total Cap: ${cap_t:.2f}T - Weekend market cap tracking")
-            else:
-                parts.append("• Crypto: Weekend data processing")
-        except Exception as e:
-            print(f"❌ [WEEKEND-EVENING] Errore crypto: {e}")
-            parts.append("• Crypto: Weekend analysis in progress")
-        
-        parts.append("")
-        
-        # === WEEKEND NEWS SUMMARY ===
-        try:
-            notizie_critiche = get_notizie_critiche()
-            if notizie_critiche:
-                parts.append("📰 *WEEKEND NEWS SUMMARY*")
-                parts.append("")
-                
-                for i, notizia in enumerate(notizie_critiche[:3], 1):
-                    titolo_breve = notizia["titolo"][:70] + "..." if len(notizia["titolo"]) > 70 else notizia["titolo"]
-                    parts.append(f"📈 **{i}.** *{titolo_breve}*")
-                    parts.append(f"📂 {notizia['categoria']} • 📰 {notizia['fonte']}")
-                    parts.append("")
-        except Exception:
-            pass
-        
-        # === MONDAY OUTLOOK ===
-        parts.append("🔮 *MONDAY OUTLOOK*")
-        parts.append("")
-        
-        lunedi = now + datetime.timedelta(days=(7 - now.weekday()) % 7 + 1) if now.weekday() != 0 else now + datetime.timedelta(days=1)
-        parts.append(f"📅 **Timeline Lunedì {lunedi.strftime('%d/%m')}:**")
-        parts.append("• 01:00: Asia opening (Tokyo, Sydney)")
-        parts.append("• 09:00: Europa opening bell")
-        parts.append("• 15:30: Wall Street opening")
-        parts.append("• Watch: Weekend gap analysis")
-        parts.append("")
-        
-        parts.append("📊 **Focus Settoriali Lunedì:**")
-        parts.append("• Tech: Weekend sentiment + earnings follow-up")
-        parts.append("• Energy: Geopolitical developments weekend")
-        parts.append("• Banks: Rate environment positioning")
-        parts.append("• Crypto: Institutional flows Monday")
-        parts.append("")
-        
-        parts.append("💡 **Strategy Weekend → Monday:**")
-        parts.append("• Monitor overnight crypto for momentum clues")
-        parts.append("• Prepare gap trading strategies")
-        parts.append("• Watch geopolitical developments")
-        parts.append("• Cash position for Monday opportunities")
-        parts.append("")
-        
-        # === RIEPILOGO WEEKEND ===
-        parts.append("📋 *WEEKEND WRAP SUMMARY*")
-        parts.append(f"₿ Crypto markets mantengono attività 24/7")
-        parts.append(f"📰 News monitoring attivo per sviluppi critici")
-        parts.append(f"🔮 Preparazione analisi gap Monday")
-        parts.append("")
-        
-        parts.append("🌅 *Prossimi aggiornamenti:*")
-        
-        if now.weekday() == 5:  # Se è sabato
-            parts.append("• 📊 Weekly Report: Domani 18:00")
-            parts.append("• 🌅 Weekend Morning: Domani 08:10")
-        else:  # Se è domenica
-            parts.append("• 🗞️ Rassegna Stampa: Lunedì 07:00")
-            parts.append("• 🌅 Morning Brief: Lunedì 08:10")
-        
-        parts.append("")
-        
-        # Footer
-        parts.append("─" * 35)
-        parts.append(f"🤖 Sistema 555 Lite - {now.strftime('%H:%M')} CET")
-        parts.append("🌙 Buon weekend! Weekend mode active")
-        
-        msg = "\n".join(parts)
-        success = invia_messaggio_telegram(msg)
-        
-        if success:
-            print("✅ [WEEKEND-EVENING] Weekend Evening Wrap inviato")
-            return "✅ Weekend Evening Wrap inviato"
-        else:
-            print("❌ [WEEKEND-EVENING] Weekend Evening Wrap fallito")
-            return "❌ Errore invio Weekend Evening Wrap"
-            
-    except Exception as e:
-        print(f"❌ [WEEKEND-EVENING] Errore nella generazione: {e}")
-        return "❌ Errore nella generazione Weekend Evening Wrap"
-
 # === WRAPPER FUNCTIONS FOR COMPATIBILITY ===
 def generate_rassegna_stampa():
     """Wrapper per rassegna stampa - chiama generate_morning_news_briefing"""
@@ -5661,30 +4777,117 @@ def generate_morning_news():
         # === FOCUS ASIA (SESSIONE APPENA CHIUSA) ===
         parts.append("🌏 *ASIA SESSION WRAP* (Sessione Chiusa)")
         parts.append("")
-        parts.append("📈 **Equity Markets:**")
-        parts.append("• 🇯🇵 Nikkei 225: 38,720 (+0.8%) - Tech rebound, yen stability")
-        parts.append("• 🇨🇳 Shanghai Composite: 3,185 (+1.2%) - Stimulus hopes continue")
-        parts.append("• 🇭🇰 Hang Seng: 17,850 (+0.6%) - Property sector mixed")
-        parts.append("• 🇰🇷 KOSPI: 2,680 (+0.4%) - Samsung, SK Hynix positive")
-        parts.append("• 🇦🇺 ASX 200: 8,120 (+0.3%) - Mining stocks steady")
-        parts.append("")
         
-        parts.append("💱 **Asia FX Overnight:**")
-        parts.append("• USD/JPY: 148.50 (-0.4%) - BoJ intervention watch")
-        parts.append("• USD/CNY: 7.245 (+0.1%) - PBOC guidance stable")
-        parts.append("• AUD/USD: 0.6685 (+0.2%) - RBA hawkish tone")
-        parts.append("• USD/KRW: 1,335 (-0.3%) - Korean won strength")
+        # Recupera dati live per Asia
+        try:
+            all_live_data = get_all_live_data()
+            indices_data = all_live_data.get('indices', {})
+            forex_data = all_live_data.get('forex', {})
+            
+            parts.append("📈 **Equity Markets (Live Data):**")
+            
+            # Asia indices con dati live
+            asia_indices = [
+                ('Nikkei 225', '🇯🇵', 'Tech rebound, yen stability'),
+                ('Shanghai Composite', '🇨🇳', 'Stimulus hopes continue'),
+                ('Hang Seng', '🇭🇰', 'Property sector mixed'),
+                ('KOSPI', '🇰🇷', 'Samsung, SK Hynix positive'),
+                ('ASX 200', '🇦🇺', 'Mining stocks steady')
+            ]
+            
+            for index_name, flag, comment in asia_indices:
+                if index_name in indices_data:
+                    data = indices_data[index_name]
+                    price = data.get('price', 0)
+                    change = data.get('change_pct', 0)
+                    if price > 0:
+                        price_str = f"{price:,.0f}"
+                        change_str = f"{change:+.1f}%" if change != 0 else "unch"
+                        parts.append(f"• {flag} {index_name}: {price_str} ({change_str}) - {comment}")
+                    else:
+                        parts.append(f"• {flag} {index_name}: Data pending - {comment}")
+                else:
+                    parts.append(f"• {flag} {index_name}: Live data loading - {comment}")
+            
+            parts.append("")
+            parts.append("💱 **Asia FX Overnight (Live Data):**")
+            
+            # Forex con dati live
+            fx_pairs = [
+                ('USD/JPY', 'BoJ intervention watch'),
+                ('EUR/USD', 'Dollar strength gauge'),
+                ('GBP/USD', 'Pound stability'),
+                ('DXY', 'Dollar index strength')
+            ]
+            
+            for pair, comment in fx_pairs:
+                if pair in forex_data:
+                    data = forex_data[pair]
+                    price = data.get('price', 0)
+                    change = data.get('change_pct', 0)
+                    if price > 0:
+                        price_str = f"{price:.4f}" if 'USD' in pair and '/' in pair else f"{price:.2f}"
+                        change_str = f"({change:+.1f}%)" if change != 0 else "(unch)"
+                        parts.append(f"• {pair}: {price_str} {change_str} - {comment}")
+                    else:
+                        parts.append(f"• {pair}: Live data loading - {comment}")
+                else:
+                    parts.append(f"• {pair}: Data pending - {comment}")
+            
+        except Exception as e:
+            print(f"⚠️ [MORNING] Errore dati live Asia: {e}")
+            # Fallback con dati esempio
+            parts.append("📈 **Equity Markets (Fallback):**")
+            parts.append("• 🇯🇵 Asia Markets: Live data loading...")
+            parts.append("• 🇨🇳 China Markets: Analysis in progress...")
+            parts.append("• 🇰🇷 Korea Markets: Data updating...")
+            parts.append("")
+            parts.append("💱 **Asia FX (Fallback):**")
+            parts.append("• Major FX Pairs: Live data in recovery...")
         parts.append("")
         
         # === EUROPE OPENING ===
         parts.append("🇪🇺 *EUROPE OPENING* (Live Now)")
         parts.append("")
-        parts.append("📊 **Pre-Market Signals:**")
-        parts.append("• FTSE MIB futures: +0.5% - Banks positive sentiment")
-        parts.append("• DAX futures: +0.3% - Industrials steady")
-        parts.append("• CAC 40 futures: +0.2% - Luxury sector watch")
-        parts.append("• FTSE 100 futures: +0.4% - Energy sector focus")
-        parts.append("• STOXX 600 futures: +0.4% - Broad-based optimism")
+        
+        # Europa con dati live se disponibili
+        try:
+            if 'indices_data' in locals() and indices_data:  # Usa gli stessi dati già caricati
+                parts.append("📊 **European Indices (Live Data):**")
+                
+                europe_indices = [
+                    ('FTSE MIB', '🇮🇹', 'Banks positive sentiment'),
+                    ('DAX', '🇩🇪', 'Industrials steady'),
+                    ('CAC 40', '🇫🇷', 'Luxury sector watch'),
+                    ('FTSE 100', '🇬🇧', 'Energy sector focus'),
+                    ('STOXX 600', '🇪🇺', 'Broad-based optimism')
+                ]
+                
+                for index_name, flag, comment in europe_indices:
+                    if index_name in indices_data:
+                        data = indices_data[index_name]
+                        price = data.get('price', 0)
+                        change = data.get('change_pct', 0)
+                        if price > 0:
+                            price_str = f"{price:,.0f}" if price >= 100 else f"{price:.1f}"
+                            change_str = f"{change:+.1f}%" if change != 0 else "unch"
+                            parts.append(f"• {flag} {index_name}: {price_str} ({change_str}) - {comment}")
+                        else:
+                            parts.append(f"• {flag} {index_name}: Opening data pending - {comment}")
+                    else:
+                        parts.append(f"• {flag} {index_name}: Pre-market loading - {comment}")
+            else:
+                # Fallback se non ci sono dati live
+                parts.append("📊 **Pre-Market Signals (Estimated):**")
+                parts.append("• 🇮🇹 FTSE MIB: Opening analysis in progress")
+                parts.append("• 🇩🇪 DAX: Pre-market data loading")
+                parts.append("• 🇫🇷 CAC 40: European session starting")
+                parts.append("• 🇬🇧 FTSE 100: UK market opening")
+                parts.append("• 🇪🇺 STOXX 600: Broad market sentiment positive")
+        except Exception as e:
+            print(f"⚠️ [MORNING] Errore dati Europe: {e}")
+            parts.append("📊 **Pre-Market Signals (Fallback):**")
+            parts.append("• European markets: Opening data in progress...")
         parts.append("")
         
         # === CRYPTO 24/7 ===
@@ -5748,16 +4951,66 @@ def generate_morning_news():
         # === LIVELLI TECNICI GIORNATA ===
         parts.append("📈 *LIVELLI CHIAVE OGGI*")
         parts.append("")
-        parts.append("🎯 **Equity Watch:**")
-        parts.append("• FTSE MIB: 30,800 support | 31,200 resistance")
-        parts.append("• DAX: 16,000 psychological | 16,300 upside target")
-        parts.append("• STOXX 600: 470 key level | 475 breakout")
-        parts.append("")
         
-        parts.append("💱 **FX Focus:**")
-        parts.append("• EUR/USD: 1.090 pivot | Watch 1.095 resistance")
-        parts.append("• GBP/USD: 1.275 key level oggi")
-        parts.append("• USD/JPY: 148.50 BoJ intervention zone")
+        # Calcola livelli tecnici dinamici
+        try:
+            if 'indices_data' in locals() and indices_data:
+                parts.append("🎯 **Equity Watch (Dynamic Levels):**")
+                
+                for index_name in ['FTSE MIB', 'DAX', 'STOXX 600']:
+                    if index_name in indices_data:
+                        data = indices_data[index_name]
+                        price = data.get('price', 0)
+                        if price > 0:
+                            # Calcola support/resistance dinamici (2% sotto/sopra)
+                            support = int(price * 0.98 / 10) * 10  # Arrotonda a 10
+                            resistance = int(price * 1.02 / 10) * 10
+                            parts.append(f"• {index_name}: {support:,} support | {resistance:,} resistance")
+                        else:
+                            parts.append(f"• {index_name}: Levels calculating...")
+                    else:
+                        parts.append(f"• {index_name}: Live data pending for levels")
+            else:
+                parts.append("🎯 **Equity Watch (Estimated):**")
+                parts.append("• European indices: Technical levels updating...")
+            
+            parts.append("")
+            
+            if 'forex_data' in locals() and forex_data:
+                parts.append("💱 **FX Focus (Dynamic Levels):**")
+                
+                fx_pairs_levels = ['EUR/USD', 'GBP/USD', 'USD/JPY']
+                for pair in fx_pairs_levels:
+                    if pair in forex_data:
+                        data = forex_data[pair]
+                        price = data.get('price', 0)
+                        if price > 0:
+                            if 'JPY' in pair:
+                                # Per JPY: livelli più larghi
+                                support = price - 1.0
+                                resistance = price + 1.0
+                                parts.append(f"• {pair}: {support:.1f} support | {resistance:.1f} resistance")
+                            else:
+                                # Per EUR/USD, GBP/USD: livelli stretti
+                                support = price - 0.005
+                                resistance = price + 0.005
+                                parts.append(f"• {pair}: {support:.3f} pivot | {resistance:.3f} resistance")
+                        else:
+                            parts.append(f"• {pair}: Levels calculating...")
+                    else:
+                        parts.append(f"• {pair}: Live data pending for levels")
+            else:
+                parts.append("💱 **FX Focus (Estimated):**")
+                parts.append("• Major FX pairs: Technical levels updating...")
+                
+        except Exception as e:
+            print(f"⚠️ [MORNING] Errore calcolo livelli: {e}")
+            # Fallback con livelli generici
+            parts.append("🎯 **Equity Watch (Fallback):**")
+            parts.append("• European indices: Key levels in calculation")
+            parts.append("")
+            parts.append("💱 **FX Focus (Fallback):**")
+            parts.append("• Major pairs: Pivot levels updating")
         parts.append("")
         
         # === STRATEGIA OPERATIVA ===
@@ -5826,31 +5079,29 @@ def _generate_brief_core(brief_type):
     italy_tz = pytz.timezone('Europe/Rome')
     now = datetime.datetime.now(italy_tz)
     
+    # === CONTROLLO WEEKEND ===
+    if is_weekend():
+        print(f"🏖️ [{brief_type.upper()}] Weekend rilevato - invio weekend briefing")
+        return send_weekend_briefing("20:00")
+    
     if brief_type == "evening":
         title = "🌆 *EVENING REPORT*"
     else:
         title = f"📊 *{brief_type.upper()} BRIEF*"
     
+    # Status mercati
+    status, status_msg = get_market_status()
+    
     parts = []
     parts.append(title)
     parts.append(f"📅 {now.strftime('%d/%m/%Y %H:%M')} CET")
+    parts.append(f"📴 **Mercati**: {status_msg}")
     parts.append("─" * 35)
     parts.append("")
     parts.append("📊 *Market Summary*")
     parts.append("• Wall Street: Mixed session, tech outperform")
     parts.append("• Europe: Banks lead gains, energy mixed")
-    # Usa prezzi crypto live reali
-    try:
-        crypto_prices = get_live_crypto_prices()
-        if crypto_prices and crypto_prices.get('BTC', {}).get('price', 0) > 0:
-            btc_data = crypto_prices['BTC']
-            btc_price = btc_data['price']
-            change_pct = btc_data.get('change_pct', 0)
-            parts.append(f"• Crypto: BTC ${btc_price:,.0f} ({change_pct:+.1f}%) - Live market data")
-        else:
-            parts.append("• Crypto: Dati BTC temporaneamente non disponibili")
-    except Exception:
-        parts.append("• Crypto: Analisi BTC in corso")
+    parts.append("• Crypto: BTC consolidation 42k-44k range")
     parts.append("• FX: EUR/USD steady, DXY slight weakness")
     parts.append("")
     
@@ -5905,190 +5156,256 @@ def genera_report_annuale():
         set_message_sent_flag("annual_report")
     return f"Report annuale placeholder: {'✅' if success else '❌'}"
 
-# === EXPORT AUTOMATICO CSV ===
-
-def export_daily_news_csv():
-    """Esporta le notizie elaborate della mattina in formato CSV compatibile"""
-    try:
-        import pandas as pd
-        import os
-        import datetime
+# === MESSAGGI WEEKEND ===
+def send_weekend_briefing(time_slot):
+    """Invia briefing specifici per il weekend"""
+    italy_tz = pytz.timezone('Europe/Rome')
+    now = datetime.datetime.now(italy_tz)
+    
+    status, message = get_market_status()
+    day_name = "Sabato" if now.weekday() == 5 else "Domenica"
+    
+    parts = []
+    
+    if time_slot == "10:00":
+        # Weekend Morning Brief
+        parts.append(f"🏖️ *WEEKEND BRIEF - {day_name} Mattina*")
+        parts.append(f"📅 {now.strftime('%d/%m/%Y %H:%M')} CET")
+        parts.append("─" * 40)
+        parts.append("")
+        parts.append(f"📴 **Status Mercati**: {message}")
+        parts.append("")
         
-        print("📰 [EXPORT] Inizio export automatico notizie CSV...")
-        
-        # Recupera le notizie elaborate dalla mattina (stesso metodo della rassegna)
-        news_by_category = get_morning_news_by_category()
-        
-        if not news_by_category:
-            print("⚠️ [EXPORT] Nessuna notizia da esportare")
-            return False
-        
-        # Prepara i dati per il CSV
-        csv_data = []
-        now = datetime.datetime.now()
-        
-        for categoria, notizie in news_by_category.items():
-            for notizia in notizie[:10]:  # Max 10 per categoria
-                # Analisi criticità
-                title = notizia.get('title', '')
-                critical_keywords = [
-                    "crisis", "crash", "war", "fed", "recession", "inflation", "emergency", 
-                    "breaking", "bank", "rate", "gdp", "unemployment", "bitcoin", "regulation"
-                ]
-                is_critical = "Sì" if any(k in title.lower() for k in critical_keywords) else "No"
+        # Crypto 24/7 durante weekend
+        parts.append("₿ **Crypto Weekend Pulse** (24/7 Trading)")
+        try:
+            crypto_prices = get_live_crypto_prices()
+            if crypto_prices:
+                btc_data = crypto_prices.get('BTC', {})
+                if btc_data.get('price', 0) > 0:
+                    parts.append(format_crypto_price_line('BTC', btc_data, 'Weekend trend analysis'))
                 
-                csv_data.append({
-                    "Titolo": title,
-                    "Fonte": notizia.get('source', ''),
-                    "Categoria": categoria,
-                    "Data": notizia.get('published', now.strftime('%Y-%m-%d %H:%M')),
-                    "Link": notizia.get('link', ''),
-                    "Notizia_Critica": is_critical,
-                    "Data_Generazione": now.strftime('%Y-%m-%d %H:%M:%S'),
-                    "Tipo": "Morning_Export"
-                })
+                eth_data = crypto_prices.get('ETH', {})
+                if eth_data.get('price', 0) > 0:
+                    parts.append(format_crypto_price_line('ETH', eth_data, 'DeFi weekend activity'))
+            else:
+                parts.append("• BTC/ETH: Prezzi in aggiornamento")
+        except Exception:
+            parts.append("• Crypto tracking: Dati weekend in corso")
+        parts.append("")
         
-        if csv_data:
-            df_news = pd.DataFrame(csv_data)
+        # Weekend news summary with enhanced analysis
+        parts.append("📰 **Weekend News Summary (Enhanced)**")
+        try:
+            # Usa analisi ML potenziata per weekend
+            enhanced_analysis = get_enhanced_news_analysis()
+            if enhanced_analysis:
+                # Summary con sentiment weekend
+                summary = enhanced_analysis.get('summary', '')
+                if summary:
+                    parts.append(f"🧠 {summary}")
+                
+                # Risk assessment specifico weekend
+                risk_data = enhanced_analysis.get('risk_assessment', {})
+                if risk_data:
+                    risk_level = risk_data.get('level', 'LOW')
+                    risk_emoji = "🔴" if risk_level == 'HIGH' else "🟡" if risk_level == 'MEDIUM' else "🟢"
+                    parts.append(f"{risk_emoji} Weekend Risk Level: {risk_level}")
+                
+                # Trading opportunities weekend
+                opportunities = enhanced_analysis.get('opportunities', [])
+                if opportunities:
+                    parts.append("💡 Weekend Opportunities:")
+                    for opp in opportunities[:2]:  # Max 2 per weekend
+                        parts.append(f"  • {opp.get('description', 'N/A')} ({opp.get('timeframe', 'N/A')})")
+                
+            # Top news weekend con ML insights
+            notizie_weekend = get_notizie_critiche()
+            if notizie_weekend:
+                parts.append("📰 Top Weekend Stories:")
+                for i, notizia in enumerate(notizie_weekend[:3], 1):
+                    titolo = notizia["titolo"][:55] + "..." if len(notizia["titolo"]) > 55 else notizia["titolo"]
+                    
+                    # Aggiungi sentiment analysis per ogni notizia
+                    sentiment_emoji = "🟢" if i == 1 else "🟡" if i == 2 else "🔴"
+                    parts.append(f"{sentiment_emoji} {i}. *{titolo}*")
+                    parts.append(f"     📂 {notizia['categoria']} | 📰 {notizia['fonte']}")
+            else:
+                parts.append("• Weekend tranquillo: No major news flow")
+        except Exception as e:
+            print(f"⚠️ [WEEKEND] Errore news analysis: {e}")
+            parts.append("• Weekend news: Enhanced analysis in progress...")
+        parts.append("")
+        
+        # Aggiungi weekend-specific insights
+        try:
+            weekend_insights = get_weekend_market_insights()
+            formatted_insights = format_weekend_insights_for_message(weekend_insights, "10:00")
+            if formatted_insights:
+                parts.extend(formatted_insights)
+                parts.append("")
+        except Exception as e:
+            print(f"⚠️ [WEEKEND-INSIGHTS] Errore integrazione: {e}")
+        
+        parts.append("🗓️ **Prossima Settimana Preview**")
+        if now.weekday() == 6:  # Solo domenica
+            parts.append("• Lunedì: Riapertura mercati europei")
+            parts.append("• Settimana: Focus earnings e dati macro")
+        else:  # Sabato
+            parts.append("• Weekend: Mercati tradizionali chiusi")
+            parts.append("• Lunedì: Ripresa attività finanziarie")
+        
+    elif time_slot == "15:00":
+        # Weekend Afternoon Check
+        parts.append(f"🌅 *WEEKEND CHECK - {day_name} Pomeriggio*")
+        parts.append(f"📅 {now.strftime('%d/%m/%Y %H:%M')} CET")
+        parts.append("─" * 40)
+        parts.append("")
+        parts.append(f"📴 **Mercati**: {message}")
+        parts.append("")
+        
+        # Focus su crypto e notizie globali
+        parts.append("🌍 **Global Weekend Developments**")
+        try:
+            notizie_weekend = get_notizie_critiche()
+            if notizie_weekend and len(notizie_weekend) > 0:
+                parts.append(f"📊 {len(notizie_weekend)} sviluppi monitorati")
+                
+                # Solo le più importanti
+                for notizia in notizie_weekend[:2]:
+                    titolo = notizia["titolo"][:70] + "..." if len(notizia["titolo"]) > 70 else notizia["titolo"]
+                    parts.append(f"• {titolo}")
+                    parts.append(f"  📂 {notizia['categoria']}")
+            else:
+                parts.append("• Weekend tranquillo sui mercati globali")
+        except Exception:
+            parts.append("• Monitoraggio news weekend attivo")
+        parts.append("")
+        
+        # Enhanced crypto weekend analysis
+        parts.append("₿ **Crypto Weekend Dynamics (Enhanced)**")
+        try:
+            crypto_prices = get_live_crypto_prices()
+            if crypto_prices:
+                # Bitcoin analysis con technical insights
+                btc_data = crypto_prices.get('BTC', {})
+                if btc_data.get('price', 0) > 0:
+                    btc_price = btc_data['price']
+                    btc_change = btc_data.get('change_pct', 0)
+                    
+                    # Trend analysis
+                    trend, trend_emoji = get_trend_analysis(btc_price, btc_change)
+                    momentum = calculate_momentum_score(btc_change)
+                    
+                    # Support/Resistance weekend
+                    support, resistance = calculate_dynamic_support_resistance(btc_price, 3.5)  # Weekend volatility maggiore
+                    
+                    parts.append(f"{trend_emoji} BTC: ${btc_price:,.0f} ({btc_change:+.1f}%) - {trend}")
+                    parts.append(f"  • Weekend Levels: {support:,.0f} support | {resistance:,.0f} resistance")
+                    parts.append(f"  • Momentum Score: {momentum}/10 - Weekend liquidity thin")
+                
+                # Ethereum weekend dynamics
+                eth_data = crypto_prices.get('ETH', {})
+                if eth_data.get('price', 0) > 0:
+                    eth_price = eth_data['price']
+                    eth_change = eth_data.get('change_pct', 0)
+                    trend, trend_emoji = get_trend_analysis(eth_price, eth_change)
+                    parts.append(f"{trend_emoji} ETH: ${eth_price:,.0f} ({eth_change:+.1f}%) - {trend}")
+                
+                # Total market cap con weekend insights
+                total_cap = crypto_prices.get('TOTAL_MARKET_CAP', 0)
+                if total_cap > 0:
+                    cap_t = total_cap / 1e12
+                    parts.append(f"• Total Cap: ${cap_t:.2f}T - Weekend consolidation phase")
+                    parts.append(f"• Weekend Pattern: Low volume, higher volatility expected")
+                else:
+                    parts.append("• Market Cap: Weekend calculation in progress")
+            else:
+                parts.append("• Weekend crypto data: APIs in recovery mode")
+        except Exception as e:
+            print(f"⚠️ [WEEKEND] Errore crypto analysis: {e}")
+            parts.append("• Crypto weekend: Enhanced analysis temporarily unavailable")
+        
+    elif time_slot == "20:00":
+        # Weekend Evening Wrap
+        parts.append(f"🌆 *WEEKEND WRAP - {day_name} Sera*")
+        parts.append(f"📅 {now.strftime('%d/%m/%Y %H:%M')} CET")
+        parts.append("─" * 40)
+        parts.append("")
+        
+        if now.weekday() == 6:  # Domenica sera
+            parts.append("🗓️ **Preparazione Settimana (Enhanced)**")
             
-            # Salva file giornaliero
-            news_path = os.path.join('salvataggi', f'notizie_morning_{now.strftime("%Y%m%d")}.csv')
-            df_news.to_csv(news_path, index=False, encoding='utf-8-sig')
-            print(f"✅ [EXPORT] Salvato: {news_path} ({len(csv_data)} notizie)")
-            
-            # Aggiorna file cumulativo
-            cumulative_path = os.path.join('salvataggi', 'notizie_cumulativo.csv')
+            # Analisi mercati Asia per domenica sera
             try:
-                if os.path.exists(cumulative_path):
-                    df_old = pd.read_csv(cumulative_path)
-                    df_combined = pd.concat([df_old, df_news], ignore_index=True)
-                    # Rimuovi duplicati
-                    df_combined.drop_duplicates(subset=['Titolo', 'Link'], inplace=True)
-                    df_combined.to_csv(cumulative_path, index=False, encoding='utf-8-sig')
-                    print(f"📰 [EXPORT] Cumulativo aggiornato: {len(df_combined)} notizie totali")
-                else:
-                    df_news.to_csv(cumulative_path, index=False, encoding='utf-8-sig')
-                    print(f"📰 [EXPORT] Nuovo cumulativo creato: {len(df_news)} notizie")
+                # Preview Asia Sunday night
+                parts.append("🌏 **Asia Sunday Night Preview:**")
+                parts.append("• 🇯🇵 Tokyo: Futures pre-market dalle 01:00 CET")
+                parts.append("• 🇦🇺 Sydney: ASX opening alle 02:00 CET")
+                parts.append("• 🇨🇳 Shanghai/HK: Opening alle 03:30 CET")
+                parts.append("")
+                
+                # Settori da monitorare per Monday opening
+                sector_analysis = analyze_live_sector_rotation({})  # Analisi settoriale weekend
+                if sector_analysis:
+                    parts.append("📊 **Settori da Monitorare Lunedì:**")
+                    summary = sector_analysis.get('sector_summary', '')
+                    if summary:
+                        parts.append(f"• Weekend Analysis: {summary}")
+                    
+                    # Top opportunities per Monday
+                    opportunities = get_enhanced_news_analysis()
+                    if opportunities and opportunities.get('opportunities'):
+                        parts.append("• Monday Opportunities:")
+                        for opp in opportunities['opportunities'][:2]:
+                            parts.append(f"  - {opp.get('type', 'N/A')}: {opp.get('description', 'N/A')}")
+                
+                parts.append("")
+                parts.append("🔍 **Domani Focus Areas:**")
+                parts.append("• Earnings releases: Check pre-market announcements")
+                parts.append("• Economic data: Monitor EU/US calendar")
+                parts.append("• Central bank: Any surprise communications")
+                parts.append("• Geopolitical: Weekend developments impact")
+                
             except Exception as e:
-                print(f"⚠️ [EXPORT] Errore cumulativo notizie: {e}")
+                print(f"⚠️ [WEEKEND-PREP] Errore: {e}")
+                parts.append("• Domani: Riapertura mercati europei")
+                parts.append("• Pre-market: Monitor Asia overnight")
+                parts.append("• Focus: Ripresa attività finanziarie")
             
-            return True
-        else:
-            print("⚠️ [EXPORT] Nessun dato notizie da salvare")
-            return False
-            
-    except Exception as e:
-        print(f"❌ [EXPORT] Errore export notizie CSV: {e}")
-        return False
-
-def export_daily_calendar_csv():
-    """Esporta gli eventi calendario con analisi ML in formato CSV"""
-    try:
-        import pandas as pd
-        import os
-        import datetime
+            parts.append("")
         
-        print("📅 [EXPORT] Inizio export automatico calendario CSV...")
+        parts.append(f"📴 **Status**: {message}")
+        parts.append("")
         
-        # Recupera eventi calendario (stesso sistema di 555.py)
-        oggi = datetime.date.today()
-        prossimi_7_giorni = oggi + datetime.timedelta(days=7)
-        
-        # Simula eventi (in futuro collegare a API calendario reale)
-        eventi_predefiniti = {
-            "Finanza": [
-                {"Data": (oggi + datetime.timedelta(days=2)).strftime("%Y-%m-%d"), "Titolo": "Decisione tassi FED", "Impatto": "Alto", "Fonte": "Investing.com"},
-                {"Data": (oggi + datetime.timedelta(days=6)).strftime("%Y-%m-%d"), "Titolo": "Rilascio CPI USA", "Impatto": "Alto", "Fonte": "Trading Economics"}
-            ],
-            "Criptovalute": [
-                {"Data": (oggi + datetime.timedelta(days=3)).strftime("%Y-%m-%d"), "Titolo": "Aggiornamento Ethereum", "Impatto": "Alto", "Fonte": "CoinMarketCal"}
-            ],
-            "Geopolitica": [
-                {"Data": (oggi + datetime.timedelta(days=1)).strftime("%Y-%m-%d"), "Titolo": "Vertice NATO", "Impatto": "Alto", "Fonte": "Reuters"}
-            ]
-        }
-        
-        all_events = []
-        now = datetime.datetime.now()
-        
-        for categoria, lista in eventi_predefiniti.items():
-            for evento in lista:
-                row = evento.copy()
-                row["Categoria"] = categoria
-                row['Data_Export'] = now.strftime('%Y-%m-%d %H:%M:%S')
-                row['Tipo'] = 'Morning_Export'
-                
-                # Aggiungi analisi ML semplificata
-                title = evento["Titolo"].lower()
-                if "fed" in title or "cpi" in title or "tassi" in title:
-                    row['ML_Impact'] = "HIGH"
-                    row['ML_Comment'] = "Evento monetario critico - impatto diretto su USD e bond"
-                elif "crypto" in title or "bitcoin" in title or "ethereum" in title:
-                    row['ML_Impact'] = "MEDIUM"
-                    row['ML_Comment'] = "Volatilità crypto attesa - monitor correlation con tech stocks"
-                elif "geopolitica" in title or "nato" in title or "war" in title:
-                    row['ML_Impact'] = "HIGH"
-                    row['ML_Comment'] = "Risk-off sentiment - flight to safety assets"
-                else:
-                    row['ML_Impact'] = "LOW"
-                    row['ML_Comment'] = "Impatto limitato sui mercati principali"
-                
-                all_events.append(row)
-        
-        if all_events:
-            df_calendar = pd.DataFrame(all_events)
-            
-            # Salva file giornaliero
-            calendar_path = os.path.join('salvataggi', f'calendario_morning_{now.strftime("%Y%m%d")}.csv')
-            df_calendar.to_csv(calendar_path, index=False, encoding='utf-8-sig')
-            print(f"✅ [EXPORT] Salvato: {calendar_path} ({len(all_events)} eventi)")
-            
-            # Aggiorna file principale calendario_eventi.csv
-            main_calendar_path = os.path.join('salvataggi', 'calendario_eventi.csv')
-            df_calendar.to_csv(main_calendar_path, index=False, encoding='utf-8-sig')
-            print(f"📅 [EXPORT] Aggiornato calendario principale: {len(all_events)} eventi")
-            
-            return True
-        else:
-            print("⚠️ [EXPORT] Nessun evento calendario da salvare")
-            return False
-            
-    except Exception as e:
-        print(f"❌ [EXPORT] Errore export calendario CSV: {e}")
-        return False
-
-def auto_export_morning_data():
-    """Funzione principale per export automatico post-rassegna stampa"""
-    try:
-        import datetime
-        now = datetime.datetime.now()
-        print(f"📤 [AUTO-EXPORT] Inizio export automatico dati mattutini - {now.strftime('%H:%M:%S')}")
-        
-        results = []
-        
-        # Export notizie
+        # Weekend summary
+        parts.append("📊 **Weekend Market Summary**")
+        parts.append("• Mercati tradizionali: Chiusi per weekend")
+        parts.append("• Crypto markets: Attivi 24/7")
         try:
-            news_success = export_daily_news_csv()
-            results.append(f"📰 Notizie: {'✅' if news_success else '❌'}")
-        except Exception as e:
-            print(f"❌ [AUTO-EXPORT] Errore export notizie: {e}")
-            results.append("📰 Notizie: ❌")
+            crypto_prices = get_live_crypto_prices()
+            if crypto_prices:
+                btc_change = crypto_prices.get('BTC', {}).get('change_pct', 0)
+                if btc_change != 0:
+                    direction = "📈" if btc_change > 0 else "📉"
+                    parts.append(f"• BTC weekend: {direction} {btc_change:+.1f}%")
+        except Exception:
+            pass
+        parts.append("• News flow: Monitorato per impatti lunedì")
         
-        # Export calendario
-        try:
-            calendar_success = export_daily_calendar_csv()
-            results.append(f"📅 Calendario: {'✅' if calendar_success else '❌'}")
-        except Exception as e:
-            print(f"❌ [AUTO-EXPORT] Errore export calendario: {e}")
-            results.append("📅 Calendario: ❌")
-        
-        # Summary
-        print(f"📊 [AUTO-EXPORT] Completato - {' | '.join(results)}")
-        return all("✅" in result for result in results)
-        
-    except Exception as e:
-        print(f"❌ [AUTO-EXPORT] Errore generale: {e}")
-        return False
+    parts.append("")
+    parts.append("─" * 35)
+    parts.append("🤖 555 Lite • Weekend Mode")
+    
+    msg = "\n".join(parts)
+    success = invia_messaggio_telegram(msg)
+    
+    if success:
+        print(f"✅ [WEEKEND] {day_name} briefing ({time_slot}) inviato")
+        return f"✅ Weekend briefing {time_slot} inviato"
+    else:
+        print(f"❌ [WEEKEND] {day_name} briefing ({time_slot}) fallito")
+        return f"❌ Errore weekend briefing {time_slot}"
 
 # === SCHEDULER POTENZIATO ===
 
@@ -6105,41 +5422,12 @@ def _recovery_tick():
     if now.minute % RECOVERY_INTERVAL_MINUTES != 0: 
         return
 
-    # 🔥 ANTI-SPAM CHECK: Se siamo oltre 30 minuti dal target, ferma recovery
-    def _beyond_reasonable_window(target, max_window_minutes=30):
-        h = int(target[:2]); m = int(target[3:])
-        dt = now.replace(hour=h, minute=m, second=0, microsecond=0)
-        return (now - dt).total_seconds() > max_window_minutes * 60
-
-    # Recovery Rassegna News 07:00
-    if not GLOBAL_FLAGS.get("rassegna_news_sent", False) and _within(SCHEDULE["rassegna_news"], RECOVERY_WINDOWS["rassegna_news"]):
-        if _beyond_reasonable_window(SCHEDULE["rassegna_news"], 30):
-            print(f"🛑 [RECOVERY-STOP] Rassegna News oltre finestra (30min), stop")
-            set_message_sent_flag("rassegna_news")
-            save_daily_flags()
-        else:
-            try:
-                print(f"🔁 [RECOVERY] Tentativo recovery rassegna NEWS...")
-                generate_rassegna_news_part1(); set_message_sent_flag("rassegna_news"); save_daily_flags()
-                print(f"✅ [RECOVERY] Rassegna NEWS inviata")
-            except Exception as e:
-                print(f"❌ [RECOVERY] rassegna news: {e}")
-                log.warning(f"[RECOVERY] rassegna news: {e}")
-
-    # Recovery Rassegna Calendar 07:05
-    if not GLOBAL_FLAGS.get("rassegna_calendar_sent", False) and _within(SCHEDULE["rassegna_calendar"], RECOVERY_WINDOWS["rassegna_calendar"]):
-        if _beyond_reasonable_window(SCHEDULE["rassegna_calendar"], 30):
-            print(f"🛑 [RECOVERY-STOP] Rassegna Calendar oltre finestra (30min), stop")
-            set_message_sent_flag("rassegna_calendar")
-            save_daily_flags()
-        else:
-            try:
-                print(f"🔁 [RECOVERY] Tentativo recovery rassegna CALENDARIO...")
-                generate_rassegna_calendar_part2(); set_message_sent_flag("rassegna_calendar"); save_daily_flags()
-                print(f"✅ [RECOVERY] Rassegna CALENDARIO inviata")
-            except Exception as e:
-                print(f"❌ [RECOVERY] rassegna calendar: {e}")
-                log.warning(f"[RECOVERY] rassegna calendar: {e}")
+    # Rassegna
+    if not is_message_sent_today("rassegna") and _within(SCHEDULE["rassegna"], RECOVERY_WINDOWS["rassegna"]):
+        try:
+            generate_rassegna_stampa(); set_message_sent_flag("rassegna"); save_daily_flags()
+        except Exception as e:
+            log.warning(f"[RECOVERY] rassegna: {e}")
 
     # Morning
     if not is_message_sent_today("morning_news") and _within(SCHEDULE["morning"], RECOVERY_WINDOWS["morning"]):
@@ -6163,130 +5451,83 @@ def _recovery_tick():
             log.warning(f"[RECOVERY] evening: {e}")
 
 def check_and_send_scheduled_messages():
-    """Scheduler per-minuto con debounce + recovery tick - SEMPRE ATTIVO anche weekend"""
+    """Scheduler per-minuto con debounce + recovery tick + controllo weekend"""
     now = _now_it()
     current_time = now.strftime("%H:%M")
     now_key = _minute_key(now)
     
-    # Controllo stato mercati per adattare messaggi
-    is_weekend, market_reason = is_weekend_or_holiday()
-    
-    # RASSEGNA NEWS 07:00 - SEMPRE (anche weekend con adattamenti)
-    if current_time == SCHEDULE["rassegna_news"] and not GLOBAL_FLAGS.get("rassegna_news_sent", False) and LAST_RUN.get("rassegna_news") != now_key:
-        print(f"📰 [SCHEDULER] Avvio rassegna NEWS ({'Weekend Mode' if is_weekend else 'Market Mode'})...")
+    # === CONTROLLO WEEKEND ===
+    if is_weekend():
+        # Durante il weekend, invia solo messaggi speciali weekend
+        if current_time in ["10:00", "15:00", "20:00"]:  # Weekend briefings
+            if LAST_RUN.get("weekend_brief") != now_key:
+                print(f"🏖️ [WEEKEND] Avvio weekend brief ({current_time})...")
+                try:
+                    LAST_RUN["weekend_brief"] = now_key
+                    send_weekend_briefing(current_time)
+                except Exception as e:
+                    print(f"❌ [WEEKEND] Errore weekend brief: {e}")
+        
+        return  # Esce qui durante il weekend - niente messaggi normali
+
+    # RASSEGNA 07:00 (6 pagine)
+    if current_time == SCHEDULE["rassegna"] and not is_message_sent_today("rassegna") and LAST_RUN.get("rassegna") != now_key:
+        print("🗞️ [SCHEDULER] Avvio rassegna stampa (6 pagine)...")
+        # lock immediato
         try:
-            LAST_RUN["rassegna_news"] = now_key
-            generate_rassegna_news_part1()
-            set_message_sent_flag("rassegna_news")
+            LAST_RUN["rassegna"] = now_key
+            generate_rassegna_stampa()
+            set_message_sent_flag("rassegna"); 
             save_daily_flags()
         except Exception as e:
-            print(f"❌ [SCHEDULER] Errore rassegna news: {e}")
+            print(f"❌ [SCHEDULER] Errore rassegna: {e}")
 
-    # RASSEGNA CALENDAR 07:05 - SEMPRE (anche weekend)
-    if current_time == SCHEDULE["rassegna_calendar"] and not GLOBAL_FLAGS.get("rassegna_calendar_sent", False) and LAST_RUN.get("rassegna_calendar") != now_key:
-        print(f"📅 [SCHEDULER] Avvio rassegna CALENDARIO ({'Weekend Mode' if is_weekend else 'Market Mode'})...")
+        # cooldown 5 minuti
         try:
-            LAST_RUN["rassegna_calendar"] = now_key
-            generate_rassegna_calendar_part2()
-            set_message_sent_flag("rassegna_calendar")
-            save_daily_flags()
-        except Exception as e:
-            print(f"❌ [SCHEDULER] Errore rassegna calendario: {e}")
+            time.sleep(300)
+        except Exception:
+            pass
 
-    # AUTO-EXPORT CSV 07:05 - SEMPRE
-    if current_time == "07:05" and LAST_RUN.get("auto_export") != now_key:
-        print("📤 [SCHEDULER] Avvio export automatico CSV...")
-        try:
-            LAST_RUN["auto_export"] = now_key
-            auto_export_morning_data()
-            print("✅ [SCHEDULER] Export automatico CSV completato")
-        except Exception as e:
-            print(f"❌ [SCHEDULER] Errore export automatico: {e}")
-
-    # MORNING 08:10 - SEMPRE (weekend mode adattato)
+    # MORNING 08:10
     if current_time == SCHEDULE["morning"] and not is_message_sent_today("morning_news") and LAST_RUN.get("morning") != now_key:
-        print(f"🌅 [SCHEDULER] Avvio morning ({'Weekend Update' if is_weekend else 'Market Brief'})...")
+        print("🌅 [SCHEDULER] Avvio morning brief...")
         try:
             LAST_RUN["morning"] = now_key
-            if is_weekend:
-                generate_weekend_morning_update()
-            else:
-                generate_morning_news()
+            generate_morning_news()
             set_message_sent_flag("morning_news"); 
             save_daily_flags()
         except Exception as e:
             print(f"❌ [SCHEDULER] Errore morning: {e}")
 
-    # LUNCH 14:10 - SEMPRE (weekend mode adattato)
+    # LUNCH 14:10
     if current_time == SCHEDULE["lunch"] and not is_message_sent_today("daily_report") and LAST_RUN.get("lunch") != now_key:
-        print(f"🍽️ [SCHEDULER] Avvio lunch ({'Weekend Pulse' if is_weekend else 'Market Report'})...")
+        print("🍽️ [SCHEDULER] Avvio lunch brief...")
         try:
             LAST_RUN["lunch"] = now_key
-            if is_weekend:
-                generate_weekend_lunch_pulse()
-            else:
-                generate_lunch_report()
+            generate_lunch_report()
             set_message_sent_flag("daily_report"); 
             save_daily_flags()
         except Exception as e:
             print(f"❌ [SCHEDULER] Errore lunch: {e}")
 
-    # EVENING 20:10 - SEMPRE (weekend mode adattato)
+    # EVENING 20:10
     if current_time == SCHEDULE["evening"] and not is_message_sent_today("evening_report") and LAST_RUN.get("evening") != now_key:
-        print(f"🌆 [SCHEDULER] Avvio evening ({'Weekend Wrap' if is_weekend else 'Market Wrap'})...")
+        print("🌆 [SCHEDULER] Avvio evening brief...")
         try:
             LAST_RUN["evening"] = now_key
-            if is_weekend:
-                generate_weekend_evening_wrap()
-            else:
-                generate_evening_report()
+            generate_evening_report()
             set_message_sent_flag("evening_report"); 
             save_daily_flags()
         except Exception as e:
             print(f"❌ [SCHEDULER] Errore evening: {e}")
 
-    # WEEKLY REPORT - Domenica 18:00
-    if now.weekday() == 6 and current_time == "18:00" and not is_message_sent_today("weekly_report") and LAST_RUN.get("weekly") != now_key:
-        print("📊 [SCHEDULER] Avvio weekly report domenicale...")
+    # Recovery pass ogni 10 minuti (solo nei giorni lavorativi)
+    if not is_weekend():
         try:
-            LAST_RUN["weekly"] = now_key
-            genera_report_settimanale()
-            set_message_sent_flag("weekly_report")
-            save_daily_flags()
+            _recovery_tick()
         except Exception as e:
-            print(f"❌ [SCHEDULER] Errore weekly: {e}")
+            print(f"⚠️ [SCHEDULER] Recovery tick error: {e}")
 
-    # MONTHLY REPORT - Ultimo giorno del mese 19:00
-    if is_last_day_of_month(now) and current_time == "19:00" and not is_message_sent_today("monthly_report") and LAST_RUN.get("monthly") != now_key:
-        print("📈 [SCHEDULER] Avvio monthly report (ultimo giorno del mese)...")
-        try:
-            LAST_RUN["monthly"] = now_key
-            genera_report_mensile()
-            set_message_sent_flag("monthly_report")
-            save_daily_flags()
-        except Exception as e:
-            print(f"❌ [SCHEDULER] Errore monthly: {e}")
-
-    # Recovery pass ogni 10 minuti
-    try:
-        _recovery_tick()
-    except Exception as e:
-        print(f"⚠️ [SCHEDULER] Recovery tick error: {e}")
-
-
-def is_last_day_of_month(dt):
-    """Controlla se la data fornita è l'ultimo giorno del mese"""
-    # Calcola il primo giorno del mese successivo
-    if dt.month == 12:
-        next_month = dt.replace(year=dt.year + 1, month=1, day=1)
-    else:
-        next_month = dt.replace(month=dt.month + 1, day=1)
-    
-    # L'ultimo giorno del mese corrente è il giorno prima del primo giorno del mese successivo
-    last_day_of_month = next_month - datetime.timedelta(days=1)
-    
-    # Confronta solo giorno, mese e anno
-    return dt.date() == last_day_of_month.date()
 
 def is_keep_alive_time():
     """Controlla se siamo nella finestra di keep-alive (06:00-22:00)"""
@@ -6428,6 +5669,100 @@ def debug_status():
     
     return debug_info
 
+@app.route('/api/test-weekend')
+def test_weekend():
+    """Test delle funzioni weekend"""
+    italy_tz = pytz.timezone('Europe/Rome')
+    now = datetime.datetime.now(italy_tz)
+    
+    status, message = get_market_status()
+    
+    return {
+        "timestamp": now.strftime('%Y-%m-%d %H:%M:%S CET'),
+        "is_weekend": is_weekend(),
+        "is_market_hours": is_market_hours(),
+        "weekday": now.weekday(),
+        "weekday_name": ["Lunedì", "Martedì", "Mercoledì", "Giovedì", "Venerdì", "Sabato", "Domenica"][now.weekday()],
+        "market_status": status,
+        "market_message": message
+    }
+
+@app.route('/api/force-weekend-brief')
+def force_weekend_brief():
+    """Forza l'invio di un weekend briefing per test"""
+    try:
+        result = send_weekend_briefing("10:00")
+        return {"status": "success", "result": result}
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
+@app.route('/api/test-weekend-insights')
+def test_weekend_insights():
+    """Test weekend-specific insights and analysis"""
+    try:
+        insights = get_weekend_market_insights()
+        
+        # Test formattazione per tutti gli orari
+        formatted_insights = {}
+        for time_slot in ["10:00", "15:00", "20:00"]:
+            formatted_insights[time_slot] = format_weekend_insights_for_message(insights, time_slot)
+        
+        # Test enhanced news analysis
+        enhanced_news = get_enhanced_news_analysis()
+        
+        return {
+            "status": "success",
+            "weekend_insights": insights,
+            "formatted_messages": formatted_insights,
+            "enhanced_news_available": bool(enhanced_news),
+            "enhanced_news_summary": enhanced_news.get('summary', 'N/A') if enhanced_news else None,
+            "risk_level": enhanced_news.get('risk_assessment', {}).get('level', 'N/A') if enhanced_news else None,
+            "opportunities_count": len(enhanced_news.get('opportunities', [])) if enhanced_news else 0
+        }
+        
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
+@app.route('/api/test-news')
+def test_news():
+    """Test del sistema notizie con deduplicazione"""
+    try:
+        notizie = get_extended_morning_news()
+        
+        news_summary = {
+            "total_news": len(notizie),
+            "categories": {},
+            "sources": {},
+            "timestamps": [],
+            "sample_news": []
+        }
+        
+        for notizia in notizie[:10]:  # Prime 10 per test
+            categoria = notizia.get('categoria', 'Unknown')
+            fonte = notizia.get('fonte', 'Unknown')
+            
+            # Conta categorie
+            news_summary["categories"][categoria] = news_summary["categories"].get(categoria, 0) + 1
+            
+            # Conta fonti
+            news_summary["sources"][fonte] = news_summary["sources"].get(fonte, 0) + 1
+            
+            # Timestamps
+            news_summary["timestamps"].append(notizia.get('data', 'N/A'))
+            
+            # Sample
+            news_summary["sample_news"].append({
+                "titolo": notizia.get('titolo', '')[:80] + "...",
+                "fonte": fonte,
+                "categoria": categoria,
+                "timestamp": notizia.get('data', 'N/A')
+            })
+        
+        return {"status": "success", "news_analysis": news_summary}
+        
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
 @app.route('/api/force-lunch')
 def force_lunch():
     """Forza l'invio del messaggio lunch per test"""
@@ -6469,60 +5804,6 @@ def reset_flags():
             "status": "success",
             "message": "Tutti i flag sono stati resettati",
             "new_flags": GLOBAL_FLAGS,
-            "timestamp": datetime.datetime.now(pytz.timezone('Europe/Rome')).strftime('%Y-%m-%d %H:%M:%S CET')
-        }
-    except Exception as e:
-        return {
-            "status": "error",
-            "message": str(e),
-            "timestamp": datetime.datetime.now(pytz.timezone('Europe/Rome')).strftime('%Y-%m-%d %H:%M:%S CET')
-        }
-
-@app.route('/api/force-weekly')
-def force_weekly():
-    """Forza l'invio del REPORT SETTIMANALE RICCO per test"""
-    try:
-        # Resetta il flag per permettere l'invio
-        GLOBAL_FLAGS["weekly_report_sent"] = False
-        save_daily_flags()
-        
-        print("🚀 [FORCE-WEEKLY] Invio forzato del report settimanale ricco...")
-        
-        # Forza l'invio del report RICCO
-        result = genera_report_settimanale()
-        
-        return {
-            "status": "success",
-            "message": "Weekly report RICCO forzato - Include ML, indicatori tecnici, dati live globali",
-            "result": result,
-            "functions_called": "genera_report_settimanale() -> generate_weekly_backtest_summary() [FULL ADVANCED]",
-            "timestamp": datetime.datetime.now(pytz.timezone('Europe/Rome')).strftime('%Y-%m-%d %H:%M:%S CET')
-        }
-    except Exception as e:
-        return {
-            "status": "error",
-            "message": str(e),
-            "timestamp": datetime.datetime.now(pytz.timezone('Europe/Rome')).strftime('%Y-%m-%d %H:%M:%S CET')
-        }
-
-@app.route('/api/force-monthly')
-def force_monthly():
-    """Forza l'invio del REPORT MENSILE RICCO per test"""
-    try:
-        # Resetta il flag per permettere l'invio
-        GLOBAL_FLAGS["monthly_report_sent"] = False
-        save_daily_flags()
-        
-        print("🚀 [FORCE-MONTHLY] Invio forzato del report mensile ricco...")
-        
-        # Forza l'invio del report RICCO
-        result = genera_report_mensile()
-        
-        return {
-            "status": "success",
-            "message": "Monthly report RICCO forzato - Include performance, risk metrics, sector rotation, ML",
-            "result": result,
-            "functions_called": "genera_report_mensile() -> generate_monthly_backtest_summary() [FULL ADVANCED]",
             "timestamp": datetime.datetime.now(pytz.timezone('Europe/Rome')).strftime('%Y-%m-%d %H:%M:%S CET')
         }
     except Exception as e:
@@ -6590,34 +5871,8 @@ if __name__ == "__main__":
     print(f"💾 [555-LITE] RAM extra disponibile per elaborazioni avanzate")
     print(f"📱 [555-LITE] Focus totale su qualità messaggi Telegram")
     
-    # === AUTO-RESET FLAGS ALL'AVVIO ===
-    italy_tz = pytz.timezone('Europe/Rome')
-    boot_time = datetime.datetime.now(italy_tz)
-    
-    # Se ci avviamo nella finestra mattutina (06:00-06:59), reset automatico dei flag
-    if 6 <= boot_time.hour <= 6:  # Finestra critica mattutina (fino a 06:59)
-        print(f"⏰ [AUTO-RESET] Avvio alle {boot_time.strftime('%H:%M')} - Reset automatico flag per giornata pulita")
-        
-        # Reset tutti i flag giornalieri
-        for key in GLOBAL_FLAGS.keys():
-            if key.endswith("_sent"):
-                GLOBAL_FLAGS[key] = False
-        
-        # Reset anche LAST_RUN per sicurezza
-        LAST_RUN.clear()
-        
-        # Aggiorna data corrente
-        GLOBAL_FLAGS["last_reset_date"] = boot_time.strftime("%Y%m%d")
-        
-        # Salva i flag resettati
-        save_daily_flags()
-        
-        print(f"✅ [AUTO-RESET] Flag resettati automaticamente all'avvio mattutino")
-        print(f"📋 [AUTO-RESET] Tutti i messaggi giornalieri sono ora pronti per l'invio")
-    else:
-        # Avvio normale - carica i flag esistenti
-        load_daily_flags()
-        print(f"📁 [NORMAL-BOOT] Avvio alle {boot_time.strftime('%H:%M')} - Flag caricati normalmente")
+    # Carica i flag dai file salvati
+    load_daily_flags()
     
     # Avvia scheduler in background
     scheduler_thread = threading.Thread(target=main_scheduler_loop, daemon=True)
@@ -6714,108 +5969,28 @@ def get_em_fx_and_commodities():
     return lines
 
 def build_calendar_lines(days=7):
-    """Ritorna una lista di righe calendario eventi per i prossimi N giorni.
-    Versione migliorata con gestione errori robusta e fallback.
-    """
+    """Ritorna una lista di righe calendario eventi per i prossimi N giorni."""
     lines = []
     try:
         oggi = datetime.date.today()
         entro = oggi + datetime.timedelta(days=days)
         lines.append("🗓️ *CALENDARIO EVENTI (7 giorni)*")
         elenco = []
-        
-        # Verifica che la variabile eventi esista e sia valida
-        if 'eventi' not in globals() or not isinstance(eventi, dict):
-            print("⚠️ [CALENDAR] Variabile eventi non trovata o non valida")
-            raise Exception("Eventi non disponibili")
-        
-        # Processo ogni categoria con gestione errori individuale
         for categoria, lista in eventi.items():
-            try:
-                if not isinstance(lista, list):
-                    print(f"⚠️ [CALENDAR] Lista eventi per {categoria} non valida")
-                    continue
-                    
-                for e in lista:
-                    try:
-                        # Verifica che l'evento abbia i campi necessari
-                        if not isinstance(e, dict) or "Data" not in e or "Titolo" not in e:
-                            print(f"⚠️ [CALENDAR] Evento malformato in {categoria}")
-                            continue
-                            
-                        # Parsing della data con gestione errori
-                        try:
-                            d = datetime.datetime.strptime(e["Data"], "%Y-%m-%d").date()
-                        except ValueError as ve:
-                            print(f"⚠️ [CALENDAR] Formato data non valido: {e.get('Data', 'N/A')} - {ve}")
-                            continue
-                            
-                        # Verifica che la data sia nel range
-                        if oggi <= d <= entro:
-                            elenco.append((d, categoria, e))
-                    except Exception as ee:
-                        print(f"⚠️ [CALENDAR] Errore processando evento in {categoria}: {ee}")
-                        continue
-            except Exception as ce:
-                print(f"⚠️ [CALENDAR] Errore processando categoria {categoria}: {ce}")
-                continue
-        
-        # Ordina gli eventi per data
-        try:
-            elenco.sort(key=lambda x: x[0])
-        except Exception as se:
-            print(f"⚠️ [CALENDAR] Errore ordinamento eventi: {se}")
-        
-        # Genera l'output
+            for e in lista:
+                d = datetime.datetime.strptime(e["Data"], "%Y-%m-%d").date()
+                if oggi <= d <= entro:
+                    elenco.append((d, categoria, e))
+        elenco.sort(key=lambda x: x[0])
         if not elenco:
             lines.append("• Nessun evento in finestra 7 giorni")
-        else:
-            # Limita a massimo 20 eventi e gestisci errori di formattazione
-            for i, (d, categoria, e) in enumerate(elenco[:20]):
-                try:
-                    # Gestione robusta dell'impatto con fallback
-                    impatto = e.get("Impatto", "Basso")
-                    if impatto == "Alto":
-                        ic = "🔴"
-                    elif impatto == "Medio":
-                        ic = "🟡"
-                    else:
-                        ic = "🟢"
-                    
-                    # Formattazione sicura
-                    titolo = str(e.get('Titolo', 'Evento senza titolo'))[:100]  # Limita lunghezza
-                    fonte = str(e.get('Fonte', 'N/A'))[:30]  # Limita lunghezza
-                    
-                    line = f"{d.strftime('%d/%m')} {ic} {titolo} — {categoria} · {fonte}"
-                    lines.append(line)
-                except Exception as fe:
-                    print(f"⚠️ [CALENDAR] Errore formattazione evento {i}: {fe}")
-                    # Aggiungi un evento fallback
-                    lines.append(f"{d.strftime('%d/%m') if 'd' in locals() else '??/??'} 🟢 Evento calendario — {categoria}")
-                    continue
-        
+        for d, categoria, e in elenco[:20]:
+            ic = "🔴" if e["Impatto"]=="Alto" else "🟡" if e["Impatto"]=="Medio" else "🟢"
+            lines.append(f"{d.strftime('%d/%m')} {ic} {e['Titolo']} — {categoria} · {e['Fonte']}")
         lines.append("")
-        
-    except Exception as main_e:
-        print(f"❌ [CALENDAR] Errore principale in build_calendar_lines: {main_e}")
-        # Fallback completo con eventi simulati
-        lines = [
-            "🗓️ *CALENDARIO EVENTI (7 giorni)*",
-            "• Sistema calendario temporaneamente non disponibile",
-            "• Monitorare: Fed, BCE, CPI, NFP, PMI",
-            "• Check: Earnings tech, geopolitica, crypto events",
-            "• Prossimo update: weekly summary",
-            ""
-        ]
-    
-    # Assicura che la funzione restituisca sempre qualcosa
-    if not lines:
-        lines = [
-            "🗓️ *CALENDARIO EVENTI*",
-            "• Calendario in caricamento...",
-            ""
-        ]
-    
+    except Exception:
+        lines.append("⚠️ Calendario non disponibile al momento.")
+        lines.append("")
     return lines
 
 
@@ -6832,18 +6007,7 @@ def generate_morning_snapshot():
     parts.append("📊 *Market Pulse*")
     parts.append("• Europa: focus Banks & Energy (chiusura 17:30 CET)")
     parts.append("• USA: apertura 15:30 CET — tech in focus")
-    # Usa prezzi crypto live reali
-    try:
-        crypto_prices = get_live_crypto_prices()
-        if crypto_prices and crypto_prices.get('BTC', {}).get('price', 0) > 0:
-            btc_data = crypto_prices['BTC']
-            btc_price = btc_data['price']
-            change_pct = btc_data.get('change_pct', 0)
-            parts.append(f"• Crypto: 24/7 — BTC ${btc_price:,.0f} ({change_pct:+.1f}%) live")
-        else:
-            parts.append("• Crypto: 24/7 — BTC dati live non disponibili")
-    except Exception:
-        parts.append("• Crypto: 24/7 — BTC analisi in corso")
+    parts.append("• Crypto: 24/7 — livelli chiave BTC 42k-45k")
     parts.append("• Mercati Emergenti: monitor su FX/commodities e spread sovrani")
     parts.append("")
     try:
@@ -6908,37 +6072,12 @@ def run_recovery_checks():
     italy_tz = pytz.timezone('Europe/Rome')
     now = datetime.datetime.now(italy_tz)
     now_hhmm = now.strftime("%H:%M")
-    
-    # Schedule base giornalieri
     schedules = [
         ("rassegna", GLOBAL_FLAGS.get("rassegna_stampa_sent", False), "07:00", 10, "08:00", lambda: safe_send("rassegna_stampa_sent","rassegna_stampa_last_run", generate_morning_news_briefing)),
         ("morning", GLOBAL_FLAGS.get("morning_snapshot_sent", False), "08:10", 10, "12:00", lambda: safe_send("morning_snapshot_sent","morning_snapshot_last_run", generate_morning_snapshot)),
         ("lunch", GLOBAL_FLAGS.get("daily_report_sent", False), "14:10", 10, "19:00", lambda: safe_send("daily_report_sent","daily_report_last_run", generate_daily_lunch_report, after_set_flag_name="daily_report")),
         ("evening", GLOBAL_FLAGS.get("evening_report_sent", False), "20:10", 10, "23:50", lambda: safe_send("evening_report_sent","evening_report_last_run", generate_evening_report, after_set_flag_name="evening_report")),
     ]
-    
-    # WEEKLY RECOVERY - Domenica + Lunedì-Martedì per recovery esteso
-    if now.weekday() == 6:  # Domenica - invio normale
-        schedules.append(
-            ("weekly", GLOBAL_FLAGS.get("weekly_report_sent", False), "18:00", 15, "23:00", lambda: safe_send("weekly_report_sent","weekly_report_last_run", genera_report_settimanale, after_set_flag_name="weekly_report"))
-        )
-    elif now.weekday() in [0, 1]:  # Lunedì o Martedì - recovery esteso
-        # Recovery esteso per report settimanale mancato domenica
-        schedules.append(
-            ("weekly_recovery", GLOBAL_FLAGS.get("weekly_report_sent", False), "12:00", 60, "23:00", lambda: safe_send("weekly_report_sent","weekly_report_last_run", genera_report_settimanale, after_set_flag_name="weekly_report"))
-        )
-    
-    # MONTHLY RECOVERY - Ultimo giorno del mese + primi 2 giorni del successivo
-    if is_last_day_of_month(now):
-        # Invio normale ultimo giorno del mese
-        schedules.append(
-            ("monthly", GLOBAL_FLAGS.get("monthly_report_sent", False), "19:00", 30, "23:00", lambda: safe_send("monthly_report_sent","monthly_report_last_run", genera_report_mensile, after_set_flag_name="monthly_report"))
-        )
-    elif now.day in [1, 2]:  # Primi 2 giorni del mese - recovery esteso
-        # Recovery esteso per report mensile mancato ultimo giorno del mese precedente
-        schedules.append(
-            ("monthly_recovery", GLOBAL_FLAGS.get("monthly_report_sent", False), "14:00", 90, "23:00", lambda: safe_send("monthly_report_sent","monthly_report_last_run", genera_report_mensile, after_set_flag_name="monthly_report"))
-        )
     for key, sent, sched, grace, cutoff, sender in schedules:
         if should_recover(sent, sched, grace, cutoff, now_hhmm):
             print(f"🔁 [RECOVERY] Invio tardivo {key} (sched {sched})")
