@@ -7269,3 +7269,33 @@ def send_telegram_message_long(text: str) -> bool:
         start = cut; part += 1
         time.sleep(1.2)
     return ok_all
+
+# === BACKGROUND SCHEDULER ===
+def run_scheduler():
+    """Background thread che esegue i controlli ogni minuto"""
+    while True:
+        try:
+            # Carica i flag aggiornati
+            load_daily_flags()
+            # Esegue controlli di recovery
+            run_recovery_checks()
+            time.sleep(60)  # Controlla ogni minuto
+        except Exception as e:
+            print(f"❌ [SCHEDULER] Errore: {e}")
+            time.sleep(60)
+
+# === MAIN ===
+if __name__ == "__main__":
+    print("🚀 [555-LITE] Avvio sistema completo...")
+    
+    # Carica flag iniziali
+    load_daily_flags()
+    
+    # Avvia scheduler in background thread
+    scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
+    scheduler_thread.start()
+    print("✅ [SCHEDULER] Background scheduler avviato")
+    
+    # Avvia Flask app
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port, debug=False)
