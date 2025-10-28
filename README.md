@@ -7,6 +7,14 @@
 ![ML](https://img.shields.io/badge/ML-TRILOGY--ENHANCED-orange.svg)
 ![Platform](https://img.shields.io/badge/platform-Render-purple.svg)
 
+## ⚠️ SISTEMA RECOVERY DISABILITATO
+
+Il sistema di recovery è temporaneamente **DISABILITATO** per evitare spam di messaggi.
+- Recovery checks: Non attivi
+- Messaggi automatici ogni 10min: Disabilitati
+- Sistema stabile senza invii ripetuti
+
+
 ## 📋 PANORAMICA SISTEMA
 
 **555-SERVERLITE** è un sistema avanzato di analisi finanziaria e ML che fornisce **rassegne stampa intelligenti**, **analisi di sentiment**, **trading signals** e **narrative continuity** attraverso messaggi Telegram automatizzati con **ML Trilogy Alignment completo**.
@@ -74,9 +82,9 @@ API Alpha Vantage fail → Finnhub → TwelveData → Dati REALI!
 | **Orario** | **Tipo** | **Messaggi** | **Descrizione** |
 |------------|----------|--------------|----------------|
 | **07:00** | 📰 Rassegna Stampa | **7 messaggi** | Analisi completa 24h + ML + Trading signals |
-| **08:10** | 🌅 Morning Report | **3 messaggi** | 🚀 **ML Enhanced**: Crypto Tech + Regime + Signals |
-| **14:10** | 🍽️ Noon Report | **3 messaggi** | 🚀 **ML Aligned**: Session Continuity + Intraday ML |
-| **20:10** | 🌆 Evening Report | **3 messaggi** | 🚀 **ML Aligned**: Daily Summary + Tomorrow ML |
+| **07:00** | 🌅 Morning Report | **3 messaggi** | 🚀 **ML Enhanced**: Crypto Tech + Regime + Signals |
+| **13:00** | 🌆 Noon Report | **3 messaggi** | 🚀 **ML Aligned**: Session Continuity + Intraday ML |
+| **17:00** | 🌇 Evening Report | **3 messaggi** | 🚀 **ML Aligned**: Daily Summary + Tomorrow ML |
 
 **Total**: **16 messaggi/giorno** ⬆️ da 10
 
@@ -107,17 +115,17 @@ API Alpha Vantage fail → Finnhub → TwelveData → Dati REALI!
 
 ## 📊 STRUTTURA MESSAGGI DETTAGLIATA v2.4 TRILOGY ML
 
-### 🌅 **Morning Report 08:10 (3 messaggi) - ML ENHANCED** 🚀
+### 🌅 **Morning Report 07:00 (3 messaggi) - ML ENHANCED** 🚀
 1. **Market Pulse**: 🔹 **Crypto Tech Analysis** - BTC trend + momentum score + support/resistance dinamici + altcoins snapshot
 2. **ML Analysis**: 🔹 **Full ML Suite** - Market regime + strategy guidance + trading signals + category weights + risk dashboard
 3. **Asia/Europe Review**: 🔹 **ML Catalyst Detection** - Major catalysts + momentum insights + intraday suggestions
 
-### 🍽️ **Noon Report 14:10 (3 messaggi) - ML ALIGNED** 🚀  
+### 🌆 **Noon Report 13:00 (3 messaggi) - ML ALIGNED** 🚀
 1. **Intraday Update**: Market moves + 🔹 **session continuity** from morning ML analysis
 2. **ML Sentiment**: 🔹 **ML reuse** + momentum updates + catalyst analysis + risk assessment intraday
 3. **Trading Signals**: 🔹 **Aligned ML signals** + intraday timing + catalyst impact + momentum guidance
 
-### 🌆 **Evening Report 20:10 (3 messaggi) - ML ALIGNED** 🚀
+### 🌇 **Evening Report 17:00 (3 messaggi) - ML ALIGNED** 🚀
 1. **Wall Street Close**: US market recap + sector performance + volume analysis
 2. **Daily Recap**: 🔹 **ML Daily Summary** - Regime confirmation + signals performance + category analysis + session consistency
 3. **Tomorrow Setup**: 🔹 **ML Tomorrow Predictions** - Regime continuation + momentum carry + risk level + priority signals
@@ -251,7 +259,7 @@ morning_analysis → stored_for_reuse → noon_evolution → evening_summary
 - **✅ SCHEDULER FISSO**: Background thread attivo ogni minuto
 - **🔁 Recovery System**: Grace period 10min + cutoff automatico  
 - **🧠 ML Integration**: Momentum + Session tracking completo
-- **🏖️ Weekend Logic**: Orari 10:00/15:00/20:00 vs 07:00/08:10/14:10/20:10
+- **🔥 Weekend Logic**: orari: 07:00, 13:00, 17:00 vs 07:00/13:00/17:00
 - **💾 Flag Persistence**: Anti-duplicati con file JSON
 
 #### **momentum_indicators.py** - Advanced ML
@@ -289,7 +297,7 @@ def run_scheduler():
         
 # Recovery automatico con grace period
 schedules = [
-    ("lunch", daily_report_sent, "14:10", 10min_grace, "19:00_cutoff")
+    ("lunch", daily_report_sent, "13:00", 10min_grace, "19:00_cutoff")
 ]
 ```
 
