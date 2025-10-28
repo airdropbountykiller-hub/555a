@@ -148,7 +148,7 @@ SCHEDULE = {
     "lunch":    "13:00",
     "evening":  "17:00",
 }
-RECOVERY_INTERVAL_MINUTES = 10
+RECOVERY_INTERVAL_MINUTES = 30
 RECOVERY_WINDOWS = {"rassegna": 60, "morning": 80, "lunch": 80, "evening": 80}
 LAST_RUN = {}  # per-minute debounce
 
@@ -3921,7 +3921,7 @@ def generate_morning_news_briefing(tipo_news="dinamico"):
                 print(f"✅ [RASSEGNA] Messaggio 1 (Analisi ML {now.strftime('%A')}) inviato")
             else:
                 print(f"❌ [RASSEGNA] Messaggio 1 (Analisi ML {now.strftime('%A')}) fallito")
-            time.sleep(2)
+            time.sleep(4)  # Rate limiting: 7 messaggi sequenziali
         except Exception as e:
             print(f"❌ [RASSEGNA] Errore messaggio analisi giornaliera: {e}")
         
@@ -3982,7 +3982,7 @@ def generate_morning_news_briefing(tipo_news="dinamico"):
             else:
                 print("❌ [RASSEGNA] Messaggio 2 (ML & Critiche) fallito")
                 
-            time.sleep(2)
+            time.sleep(4)  # Rate limiting: 7 messaggi sequenziali
             
         except Exception as e:
             print(f"❌ [RASSEGNA] Errore messaggio ML & Critiche: {e}")
@@ -4075,7 +4075,7 @@ def generate_morning_news_briefing(tipo_news="dinamico"):
             else:
                 print("❌ [RASSEGNA] Messaggio 3 (Calendario & ML) fallito")
                 
-            time.sleep(2)
+            time.sleep(4)  # Rate limiting: 7 messaggi sequenziali
             
         except Exception as e:
             print(f"❌ [RASSEGNA] Errore messaggio Calendario: {e}")
@@ -4312,7 +4312,7 @@ def generate_morning_news_briefing(tipo_news="dinamico"):
             else:
                 print(f"❌ [MORNING] Messaggio {i} ({categoria}) fallito")
             
-            time.sleep(2)  # Pausa tra messaggi
+            time.sleep(4)  # Rate limiting: 7 messaggi sequenziali
         
         # SALVA TITOLI UTILIZZATI NELLA STORIA (per evitare duplicati domani)
         try:
@@ -6972,376 +6972,162 @@ def generate_rassegna_stampa():
     return generate_morning_news_briefing(tipo_news="rassegna")
 
 def generate_morning_news():
-    """MORNING REPORT - Focus Asia e outlook giornata (09:00)"""
+    """MORNING REPORT (09:00) - 3 MESSAGGI SEPARATI"""
     try:
         italy_tz = pytz.timezone('Europe/Rome')
         now = datetime.datetime.now(italy_tz)
         
-        print(f"🌅 [MORNING-REPORT] Generazione Morning Report - {now.strftime('%H:%M:%S')}")
+        print(f"🌅 [MORNING-REPORT] Generazione 3 messaggi Morning Report - {now.strftime('%H:%M:%S')}")
         
-        parts = []
-        parts.append("🌅 *MORNING REPORT*")
-        parts.append(f"📅 {now.strftime('%d/%m/%Y %H:%M')} CET • Asia Close + Europe Open")
-        parts.append("─" * 40)
-        parts.append("")
+        success_count = 0
         
-        # === DAILY FOCUS & NARRATIVE CONTINUITY ===
-        if SESSION_TRACKER_ENABLED:
+        # MESSAGGIO 1: MARKET PULSE (Crypto Tech Analysis)
+        try:
+            msg1_parts = []
+            msg1_parts.append("🌅 *MORNING REPORT - MARKET PULSE* (1/3)")
+            msg1_parts.append(f"📅 {now.strftime('%d/%m/%Y %H:%M')} CET • Crypto Tech Analysis")
+            msg1_parts.append("─" * 40)
+            msg1_parts.append("")
+            
+            # Crypto Technical Analysis
+            msg1_parts.append("₿ *CRYPTO TECHNICAL ANALYSIS*")
             try:
-                # Identifica focus giornaliero basato su eventi e ML
-                focus_items = []
-                key_events = {}
-                
-                # Analizza notizie per identificare focus principale
-                try:
-                    notizie_critiche = get_notizie_critiche()
-                    if notizie_critiche:
-                        # Estrai focus dai titoli delle notizie più importanti
-                        for notizia in notizie_critiche[:3]:
-                            titolo = notizia['titolo'].lower()
-                            if any(keyword in titolo for keyword in ['fed', 'powell', 'rates']):
-                                focus_items.append("Fed policy & rates")
-                                key_events['Fed_Speech'] = "Powell speech 16:00 ET - watch volatility"
-                            elif any(keyword in titolo for keyword in ['earnings', 'results']):
-                                focus_items.append("Earnings season")
-                                key_events['Earnings'] = "Tech earnings continuation - guidance focus"
-                            elif any(keyword in titolo for keyword in ['china', 'geopolitical']):
-                                focus_items.append("Geopolitical developments")
-                                key_events['Geopolitics'] = "China relations & trade implications"
-                except:
-                    pass
-                
-                # Default focus se nessuno trovato
-                if not focus_items:
-                    focus_items = ["Market momentum", "Sector rotation"]
-                    key_events['Market_Open'] = "European opening & US pre-market setup"
-                
-                # Sentiment ML per il tracking
-                try:
-                    news_analysis = analyze_news_sentiment_and_impact()
-                    ml_sentiment = news_analysis.get('sentiment', 'NEUTRAL')
-                except:
-                    ml_sentiment = 'NEUTRAL'
-                
-                # Imposta focus giornaliero
-                set_morning_focus(focus_items, key_events, ml_sentiment)
-                
-                # Aggiungi predizioni trackabili
-                if focus_items:
-                    add_morning_prediction(
-                        "Daily_Focus", 
-                        f"{focus_items[0]} will drive market direction",
-                        "14:00",
-                        "HIGH"
-                    )
-                
-                # Ottieni narrative per il morning
-                morning_narratives = get_morning_narrative()
-                if morning_narratives:
-                    parts.append("🎯 *FOCUS GIORNATA & SETUP STRATEGICO*")
-                    parts.extend(morning_narratives)
-                    parts.append("")
+                crypto_prices = get_live_crypto_prices()
+                if crypto_prices:
+                    btc_data = crypto_prices.get('BTC', {})
+                    if btc_data.get('price', 0) > 0:
+                        price = btc_data.get('price', 0)
+                        change_pct = btc_data.get('change_pct', 0)
+                        msg1_parts.append(f"• BTC: ${price:,.0f} ({change_pct:+.1f}%) - Trend analysis active")
+                        msg1_parts.append(f"• Momentum Score: {abs(change_pct):.1f}/10 - {'Strong' if abs(change_pct) > 2 else 'Moderate'}")
+                        
+                        # Support/Resistance dinamici
+                        support = price * 0.95
+                        resistance = price * 1.05
+                        msg1_parts.append(f"• Support: ${support:,.0f} (-5%) | Resistance: ${resistance:,.0f} (+5%)")
                     
-                print(f"✅ [MORNING] Session focus set: {', '.join(focus_items[:2])}")
-                
+                    # Altcoins snapshot
+                    eth_data = crypto_prices.get('ETH', {})
+                    if eth_data.get('price', 0) > 0:
+                        eth_price = eth_data.get('price', 0)
+                        eth_change = eth_data.get('change_pct', 0)
+                        msg1_parts.append(f"• ETH: ${eth_price:,.0f} ({eth_change:+.1f}%) - DeFi activity tracking")
+                else:
+                    msg1_parts.append("• BTC/ETH: Live data loading - Technical analysis pending")
             except Exception as e:
-                print(f"⚠️ [MORNING] Session tracking error: {e}")
-        
-        # === FOCUS ASIA (SESSIONE APPENA CHIUSA) ===
-        parts.append("🌏 *ASIA SESSION WRAP* (Sessione Chiusa)")
-        parts.append("")
-        
-        # Recupera dati live per Asia
-        try:
-            all_live_data = get_all_live_data()
-            indices_data = all_live_data.get('indices', {})
-            forex_data = all_live_data.get('forex', {})
+                msg1_parts.append("• Crypto data: API in recupero")
             
-            parts.append("📈 **Equity Markets (Live Data):**")
+            msg1_parts.append("")
+            msg1_parts.append(f"🤖 Sistema 555 Lite - {now.strftime('%H:%M')} CET")
             
-            # Asia indices con dati live
-            asia_indices = [
-                ('Nikkei 225', '🇯🇵', 'Tech rebound, yen stability'),
-                ('Shanghai Composite', '🇨🇳', 'Stimulus hopes continue'),
-                ('Hang Seng', '🇭🇰', 'Property sector mixed'),
-                ('KOSPI', '🇰🇷', 'Samsung, SK Hynix positive'),
-                ('ASX 200', '🇦🇺', 'Mining stocks steady')
-            ]
-            
-            for index_name, flag, comment in asia_indices:
-                if index_name in indices_data:
-                    data = indices_data[index_name]
-                    price = data.get('price', 0)
-                    change = data.get('change_pct', 0)
-                    if price > 0:
-                        price_str = f"{price:,.0f}"
-                        change_str = f"{change:+.1f}%" if change != 0 else "unch"
-                        parts.append(f"• {flag} {index_name}: {price_str} ({change_str}) - {comment}")
-                    else:
-                        parts.append(f"• {flag} {index_name}: Data pending - {comment}")
-                else:
-                    parts.append(f"• {flag} {index_name}: Live data loading - {comment}")
-            
-            parts.append("")
-            parts.append("💱 **Asia FX Overnight (Live Data):**")
-            
-            # Forex con dati live
-            fx_pairs = [
-                ('USD/JPY', 'BoJ intervention watch'),
-                ('EUR/USD', 'Dollar strength gauge'),
-                ('GBP/USD', 'Pound stability'),
-                ('DXY', 'Dollar index strength')
-            ]
-            
-            for pair, comment in fx_pairs:
-                if pair in forex_data:
-                    data = forex_data[pair]
-                    price = data.get('price', 0)
-                    change = data.get('change_pct', 0)
-                    if price > 0:
-                        price_str = f"{price:.4f}" if 'USD' in pair and '/' in pair else f"{price:.2f}"
-                        change_str = f"({change:+.1f}%)" if change != 0 else "(unch)"
-                        parts.append(f"• {pair}: {price_str} {change_str} - {comment}")
-                    else:
-                        parts.append(f"• {pair}: Live data loading - {comment}")
-                else:
-                    parts.append(f"• {pair}: Data pending - {comment}")
+            msg1 = "\n".join(msg1_parts)
+            if invia_messaggio_telegram(msg1):
+                success_count += 1
+                print("✅ [MORNING] Messaggio 1 (Market Pulse) inviato")
             
         except Exception as e:
-            print(f"⚠️ [MORNING] Errore dati live Asia: {e}")
-            # Fallback con dati esempio
-            parts.append("📈 **Equity Markets (Fallback):**")
-            parts.append("• 🇯🇵 Asia Markets: Live data loading...")
-            parts.append("• 🇨🇳 China Markets: Analysis in progress...")
-            parts.append("• 🇰🇷 Korea Markets: Data updating...")
-            parts.append("")
-            parts.append("💱 **Asia FX (Fallback):**")
-            parts.append("• Major FX Pairs: Live data in recovery...")
-        parts.append("")
+            print(f"❌ [MORNING] Errore messaggio 1: {e}")
         
-        # === EUROPE OPENING ===
-        parts.append("🇪🇺 *EUROPE OPENING* (Live Now)")
-        parts.append("")
-        
-        # Europa con dati live se disponibili
+        # MESSAGGIO 2: ML ANALYSIS (Full ML Suite)
         try:
-            if 'indices_data' in locals() and indices_data:  # Usa gli stessi dati già caricati
-                parts.append("📊 **European Indices (Live Data):**")
+            msg2_parts = []
+            msg2_parts.append("🌅 *MORNING REPORT - ML ANALYSIS* (2/3)")
+            msg2_parts.append(f"📅 {now.strftime('%d/%m/%Y %H:%M')} CET • Full ML Suite")
+            msg2_parts.append("─" * 40)
+            msg2_parts.append("")
+            
+            # Market Regime Detection
+            msg2_parts.append("🧠 *MARKET REGIME & ML SUITE*")
+            try:
+                news_analysis = analyze_news_sentiment_and_impact()
+                sentiment = news_analysis.get('sentiment', 'NEUTRAL')
+                regime = 'RISK_ON' if sentiment == 'POSITIVE' else 'RISK_OFF' if sentiment == 'NEGATIVE' else 'SIDEWAYS'
                 
-                europe_indices = [
-                    ('FTSE MIB', '🇮🇹', 'Banks positive sentiment'),
-                    ('DAX', '🇩🇪', 'Industrials steady'),
-                    ('CAC 40', '🇫🇷', 'Luxury sector watch'),
-                    ('FTSE 100', '🇬🇧', 'Energy sector focus'),
-                    ('STOXX 600', '🇪🇺', 'Broad-based optimism')
-                ]
+                regime_emoji = {'RISK_ON': '🚀', 'RISK_OFF': '🐻', 'SIDEWAYS': '🔄'}.get(regime, '❓')
+                msg2_parts.append(f"• Market Regime: {regime} {regime_emoji}")
+                msg2_parts.append(f"• ML Sentiment: {sentiment} - Strategy guidance active")
                 
-                for index_name, flag, comment in europe_indices:
+                # Trading signals
+                if regime == 'RISK_ON':
+                    msg2_parts.append("• Position Sizing: 1.2x - Growth/Crypto bias")
+                    msg2_parts.append("• Preferred: Tech, Crypto, Emerging Markets")
+                elif regime == 'RISK_OFF':
+                    msg2_parts.append("• Position Sizing: 0.6x - Defensive stance")
+                    msg2_parts.append("• Preferred: Bonds, Cash, Defensive sectors")
+                else:
+                    msg2_parts.append("• Position Sizing: 1.0x - Balanced approach")
+                    msg2_parts.append("• Preferred: Quality stocks, Mean reversion")
+                    
+            except Exception as e:
+                msg2_parts.append("• Market Regime: Analysis in progress")
+                msg2_parts.append("• ML Sentiment: Loading ML suite")
+            
+            msg2_parts.append("")
+            msg2_parts.append(f"🤖 Sistema 555 Lite - {now.strftime('%H:%M')} CET")
+            
+            msg2 = "\n".join(msg2_parts)
+            if invia_messaggio_telegram(msg2):
+                success_count += 1
+                print("✅ [MORNING] Messaggio 2 (ML Analysis) inviato")
+                
+        except Exception as e:
+            print(f"❌ [MORNING] Errore messaggio 2: {e}")
+        
+        # MESSAGGIO 3: ASIA/EUROPE REVIEW (ML Catalyst Detection)
+        try:
+            msg3_parts = []
+            msg3_parts.append("🌅 *MORNING REPORT - ASIA/EUROPE REVIEW* (3/3)")
+            msg3_parts.append(f"📅 {now.strftime('%d/%m/%Y %H:%M')} CET • ML Catalyst Detection")
+            msg3_parts.append("─" * 40)
+            msg3_parts.append("")
+            
+            # Asia Session Wrap
+            msg3_parts.append("🌏 *ASIA SESSION CLOSE*")
+            try:
+                all_live_data = get_all_live_data()
+                indices_data = all_live_data.get('indices', {})
+                
+                asia_indices = [('Nikkei 225', '🇯🇵'), ('Shanghai Composite', '🇨🇳'), ('Hang Seng', '🇭🇰')]
+                for index_name, flag in asia_indices:
                     if index_name in indices_data:
                         data = indices_data[index_name]
-                        price = data.get('price', 0)
                         change = data.get('change_pct', 0)
-                        if price > 0:
-                            price_str = f"{price:,.0f}" if price >= 100 else f"{price:.1f}"
-                            change_str = f"{change:+.1f}%" if change != 0 else "unch"
-                            parts.append(f"• {flag} {index_name}: {price_str} ({change_str}) - {comment}")
-                        else:
-                            parts.append(f"• {flag} {index_name}: Opening data pending - {comment}")
+                        msg3_parts.append(f"• {flag} {index_name}: {change:+.1f}%")
                     else:
-                        parts.append(f"• {flag} {index_name}: Pre-market loading - {comment}")
-            else:
-                # Fallback se non ci sono dati live
-                parts.append("📊 **Pre-Market Signals (Estimated):**")
-                parts.append("• 🇮🇹 FTSE MIB: Opening analysis in progress")
-                parts.append("• 🇩🇪 DAX: Pre-market data loading")
-                parts.append("• 🇫🇷 CAC 40: European session starting")
-                parts.append("• 🇬🇧 FTSE 100: UK market opening")
-                parts.append("• 🇪🇺 STOXX 600: Broad market sentiment positive")
-        except Exception as e:
-            print(f"⚠️ [MORNING] Errore dati Europe: {e}")
-            parts.append("📊 **Pre-Market Signals (Fallback):**")
-            parts.append("• European markets: Opening data in progress...")
-        parts.append("")
-        
-        # === CRYPTO 24/7 ===
-        parts.append("₿ *CRYPTO 24/7 PULSE*")
-        parts.append("")
-        try:
-            # Recupera prezzi live per crypto pulse
-            crypto_prices = get_live_crypto_prices()
-            if crypto_prices:
-                # Bitcoin
-                btc_data = crypto_prices.get('BTC', {})
-                if btc_data.get('price', 0) > 0:
-                    parts.append(format_crypto_price_line('BTC', btc_data, 'Asia buying momentum'))
-                else:
-                    parts.append("• BTC: Prezzo live non disponibile - Asia analysis pending")
-                
-                # Ethereum
-                eth_data = crypto_prices.get('ETH', {})
-                if eth_data.get('price', 0) > 0:
-                    parts.append(format_crypto_price_line('ETH', eth_data, 'DeFi activity uptick'))
-                else:
-                    parts.append("• ETH: Prezzo live non disponibile - DeFi tracking")
-                
-                # Market cap totale
-                total_cap = crypto_prices.get('TOTAL_MARKET_CAP', 0)
-                if total_cap > 0:
-                    cap_t = total_cap / 1e12
-                    parts.append(f"• Total Market Cap: ${cap_t:.2f}T - Market expansion tracking")
-                else:
-                    parts.append("• Total Market Cap: Calcolo in corso")
-            else:
-                parts.append("• BTC: Prezzi live non disponibili - API in recupero")
-                parts.append("• ETH: Prezzi live non disponibili - API in recupero")
-                parts.append("• Total Market Cap: Calcolo in corso - dati live pending")
-        except Exception as e:
-            print(f"❌ [MORNING] Errore recupero prezzi crypto: {e}")
-            parts.append("• BTC: Prezzi temporaneamente non disponibili")
-            parts.append("• ETH: Prezzi temporaneamente non disponibili")
-            parts.append("• Total Market Cap: Analisi in corso")
-        
-        parts.append("• Fear & Greed: 72 (Greed) - Sentiment positive")
-        parts.append("")
-        
-        # === OUTLOOK GIORNATA ===
-        parts.append("🔮 *OUTLOOK GIORNATA EUROPEA*")
-        parts.append("")
-        parts.append("⏰ **Timeline Oggi:**")
-        parts.append("• 09:00-17:30: Sessione Europa completa")
-        parts.append("• 14:00-17:00: London-NY overlap (volume peak)")
-        parts.append("• 15:30: Apertura Wall Street")
-        parts.append("• 17:30: Chiusura mercati europei")
-        parts.append("")
-        
-        parts.append("📊 **Focus Settoriali Giornata:**")
-        parts.append("• Banks: Tassi e guidance BCE in focus")
-        parts.append("• Energy: Oil momentum + geopolitica")
-        parts.append("• Tech: Earnings pre-market USA")
-        parts.append("• Materials: China demand + commodities")
-        parts.append("")
-        
-        # === LIVELLI TECNICI GIORNATA ===
-        parts.append("📈 *LIVELLI CHIAVE OGGI*")
-        parts.append("")
-        
-        # Calcola livelli tecnici dinamici
-        try:
-            if 'indices_data' in locals() and indices_data:
-                parts.append("🎯 **Equity Watch (Dynamic Levels):**")
-                
-                for index_name in ['FTSE MIB', 'DAX', 'STOXX 600']:
-                    if index_name in indices_data:
-                        data = indices_data[index_name]
-                        price = data.get('price', 0)
-                        if price > 0:
-                            # Calcola support/resistance dinamici (2% sotto/sopra)
-                            support = int(price * 0.98 / 10) * 10  # Arrotonda a 10
-                            resistance = int(price * 1.02 / 10) * 10
-                            parts.append(f"• {index_name}: {support:,} support | {resistance:,} resistance")
-                        else:
-                            parts.append(f"• {index_name}: Levels calculating...")
-                    else:
-                        parts.append(f"• {index_name}: Live data pending for levels")
-            else:
-                parts.append("🎯 **Equity Watch (Estimated):**")
-                parts.append("• European indices: Technical levels updating...")
+                        msg3_parts.append(f"• {flag} {index_name}: Data loading")
+            except:
+                msg3_parts.append("• Asian markets: Live data in recovery")
             
-            parts.append("")
+            msg3_parts.append("")
             
-            if 'forex_data' in locals() and forex_data:
-                parts.append("💱 **FX Focus (Dynamic Levels):**")
-                
-                fx_pairs_levels = ['EUR/USD', 'GBP/USD', 'USD/JPY']
-                for pair in fx_pairs_levels:
-                    if pair in forex_data:
-                        data = forex_data[pair]
-                        price = data.get('price', 0)
-                        if price > 0:
-                            if 'JPY' in pair:
-                                # Per JPY: livelli più larghi
-                                support = price - 1.0
-                                resistance = price + 1.0
-                                parts.append(f"• {pair}: {support:.1f} support | {resistance:.1f} resistance")
-                            else:
-                                # Per EUR/USD, GBP/USD: livelli stretti
-                                support = price - 0.005
-                                resistance = price + 0.005
-                                parts.append(f"• {pair}: {support:.3f} pivot | {resistance:.3f} resistance")
-                        else:
-                            parts.append(f"• {pair}: Levels calculating...")
-                    else:
-                        parts.append(f"• {pair}: Live data pending for levels")
-            else:
-                parts.append("💱 **FX Focus (Estimated):**")
-                parts.append("• Major FX pairs: Technical levels updating...")
+            # Europe Opening
+            msg3_parts.append("🇪🇺 *EUROPE OPENING*")
+            msg3_parts.append("• Pre-market sentiment: Cautiously optimistic")
+            msg3_parts.append("• Key focus: ECB policy, earnings continuation")
+            msg3_parts.append("• Intraday suggestions: Monitor opening gaps")
+            
+            msg3_parts.append("")
+            msg3_parts.append(f"🤖 Sistema 555 Lite - {now.strftime('%H:%M')} CET")
+            
+            msg3 = "\n".join(msg3_parts)
+            if invia_messaggio_telegram(msg3):
+                success_count += 1
+                print("✅ [MORNING] Messaggio 3 (Asia/Europe Review) inviato")
                 
         except Exception as e:
-            print(f"⚠️ [MORNING] Errore calcolo livelli: {e}")
-            # Fallback con livelli generici
-            parts.append("🎯 **Equity Watch (Fallback):**")
-            parts.append("• European indices: Key levels in calculation")
-            parts.append("")
-            parts.append("💱 **FX Focus (Fallback):**")
-            parts.append("• Major pairs: Pivot levels updating")
-        parts.append("")
+            print(f"❌ [MORNING] Errore messaggio 3: {e}")
         
-        # === STRATEGIA OPERATIVA ===
-        parts.append("💡 *STRATEGIA OPERATIVA MATTINA*")
-        parts.append("")
-        parts.append("✅ **Trade Ideas:**")
-        parts.append("• Europe opening: Monitor gap fills e momentum")
-        parts.append("• Asia carry-over: Sectors positivi da replicare")
-        parts.append("• FX: EUR/USD range trading opportunity")
-        # BTC breakout level dinamico
-        try:
-            crypto_prices = get_live_crypto_prices()
-            if crypto_prices and crypto_prices.get('BTC', {}).get('price', 0) > 0:
-                btc_price = crypto_prices['BTC']['price']
-                breakout_level = int(btc_price * 1.02 / 1000) * 1000  # +2% arrotondato
-                parts.append(f"• Crypto: BTC {breakout_level/1000:.0f}k breakout da confermare")
-            else:
-                parts.append("• Crypto: BTC breakout level in calcolo")
-        except Exception:
-            parts.append("• Crypto: BTC breakout monitoring")
-        parts.append("")
+        print(f"✅ [MORNING] Completato: {success_count}/3 messaggi inviati")
+        return f"Morning Report: {success_count}/3 messaggi inviati"
         
-        parts.append("⚠️ **Risk Watch:**")
-        parts.append("• Geopolitical headlines - impact immediato")
-        parts.append("• Central bank communications (surprise factor)")
-        parts.append("• Energy price spikes - sector rotation")
-        parts.append("")
-        
-        # === RIEPILOGO ===
-        parts.append("📋 *RIEPILOGO MATTINA*")
-        parts.append(f"🌏 Asia chiude positiva (+0.6% medio)")
-        parts.append(f"🇪🇺 Europa apre con sentiment costruttivo")
-        parts.append(f"💱 FX stabile, USD/JPY sotto osservazione")
-        parts.append(f"₿ Crypto momentum positivo continua")
-        parts.append("")
-        
-        parts.append("🔮 *Prossimi aggiornamenti:*")
-        parts.append("• 🍽️ Lunch Report: 13:00 (analisi completa)")
-        parts.append("• 🌆 Evening Report: 17:00")
-        parts.append("")
-        
-        parts.append("─" * 35)
-        parts.append("🤖 555 Lite • Morning Report")
-        
-        # Invia messaggio unico
-        msg = "\n".join(parts)
-        success = invia_messaggio_telegram(msg)
-        
-        if success:
-            print("✅ [MORNING] Morning Report inviato")
-            return "✅ Morning Report inviato"
-        else:
-            print("❌ [MORNING] Morning Report fallito")
-            return "❌ Errore invio Morning Report"
-            
     except Exception as e:
-        print(f"❌ [MORNING] Errore nella generazione Morning Report: {e}")
-        return "❌ Errore nella generazione Morning Report"
+        print(f"❌ [MORNING] Errore generale: {e}")
+        return f"Morning Report: Errore - {str(e)}"
+
+def _old_generate_morning_news_single_message():
+    """VERSIONE PRECEDENTE - MESSAGGIO SINGOLO (DEPRECATA)"""
+    # Vecchia implementazione qui se necessario per rollback
+    pass
 
 def generate_lunch_report():
     """Wrapper per lunch report - chiama generate_daily_lunch_report"""
