@@ -1,29 +1,180 @@
-# 🚀 555-SERVERLITE - Advanced Financial News & ML Analytics System
+# 🚀 Sistema 555-Lite - Trading Report Automatico
 
-![Version](https://img.shields.io/badge/version-2.5--NEW--SCHEDULE-brightgreen.svg)
-![Status](https://img.shields.io/badge/status-PRODUCTION--ACTIVE-success.svg)
-![Messages](https://img.shields.io/badge/messages-14--DAILY--OPTIMIZED-blue.svg)
-![System](https://img.shields.io/badge/structure-DEFINITIVELY--LOCKED-red.svg)
-![ML](https://img.shields.io/badge/ML-TRILOGY--ENHANCED-orange.svg)
+![Version](https://img.shields.io/badge/version-3.0--EVENING--INTEGRATED-brightgreen.svg)
+![Status](https://img.shields.io/badge/status-PRODUCTION--READY-success.svg)
+![Messages](https://img.shields.io/badge/messages-17--DAILY--COMPLETE-blue.svg)
+![System](https://img.shields.io/badge/structure-IMMUTABLE--LOCKED-red.svg)
+![ML](https://img.shields.io/badge/ML-LIVE--DATA--FOCUS-orange.svg)
 ![Platform](https://img.shields.io/badge/platform-Render--Optimized-purple.svg)
-![Recovery](https://img.shields.io/badge/recovery-30min--OPTIMIZED-yellow.svg)
+![Recovery](https://img.shields.io/badge/recovery-FULL--COVERAGE-yellow.svg)
 
-## 🚨 **STRUTTURA IMMUTABILE** - PRIORITÀ ASSOLUTA ⚠️
+## 📊 **STRUTTURA IMMUTABILE - SCHEDULING DEFINITIVO**
 
-### 🔒 **ARCHITETTURA DEFINITIVA - NON MODIFICABILE**
+### 🕐 **Flusso Giornaliero Completo (08:00-18:00):**
+```
+08:00 → 09:00 → 13:00 → 17:00 → 18:00
+  ↓       ↓       ↓       ↓       ↓
+Rassegna Morning Lunch Evening Summary
+(7 msg)  (3 msg) (3 msg) (3 msg) (1 msg)
+```
 
-La struttura del sistema è **COMPLETAMENTE IMMUTABILE** e rappresenta la **configurazione finale ottimizzata**:
+### 📋 **Dettaglio Messaggi (17 TOTALI/GIORNO):**
+- **08:00 - Rassegna Stampa**: 7 messaggi per categoria (Economia, Tech, Geopolitica, etc.)
+- **09:00 - Morning Report**: 3 messaggi sequenziali (Market Pulse, Analysis, Strategy)  
+- **13:00 - Lunch Report**: 3 messaggi (Intraday Update, Verification, Signals)
+- **17:00 - Evening Report**: 3 messaggi (Wall Street Close, Daily Recap, Tomorrow Setup) ⭐ **NUOVO**
+- **18:00 - Daily Summary**: 1 messaggio finale con recap completo giornata
 
-**📊 STRUTTURA AGGIORNATA (14 MESSAGGI/GIORNO):**
-- **08:00 Rassegna Stampa**: 7 messaggi sequenziali
-- **09:00 Morning Report**: 3 messaggi ML-enhanced  
-- **13:00 Lunch Report**: 3 messaggi intraday
-- **18:00 Daily Summary**: 1 messaggio riassuntivo completo
+### 🔗 **Continuità Narrativa (COERENZA MASSIMA):**
+- **Rassegna → Morning**: Top news connection + ML impact analysis
+- **Morning → Lunch**: Predictions verification + regime tracking  
+- **Lunch → Evening**: Sentiment evolution + intraday performance ⭐ **NUOVO**
+- **Evening → Summary**: Close analysis + full-day coherence ⭐ **NUOVO**
+- **Summary → Next Rassegna**: Daily recap + tomorrow preparation
 
-### ⛔ **RECOVERY SISTEMA OTTIMIZZATO**
-- Recovery interval: **30 minuti** (ottimizzato da 10min)
-- Grace period: Sufficiente per completare sequenze
-- Sistema anti-spam: Attivo e calibrato
+---
+
+## 🎯 **ROADMAP MIGLIORAMENTI - PRIORITÀ CRITICA**
+
+### ❌ **PROBLEMI IDENTIFICATI E PIANO RISOLUZIONE:**
+
+#### **🔴 PRIORITÀ CRITICA - DATI LIVE:**
+1. **Range BTC Obsoleti**: 
+   - ❌ **Problema**: Analisi ML mostrava "40k-50k" quando BTC era a 100k
+   - ✅ **Soluzione**: API real-time + validazione range dinamici
+   - 🎯 **Target**: Prezzi sempre attuali ±5% valore reale
+
+2. **Quotazioni Mancanti**:
+   - ❌ **Problema**: API fallback a volte non funzionanti
+   - ✅ **Soluzione**: Multi-provider con 3+ backup per asset
+   - 🎯 **Target**: 99.9% availability prezzi
+
+3. **Latenza Dati**:
+   - ❌ **Problema**: Prezzi non real-time, analisi su dati vecchi
+   - ✅ **Soluzione**: API live con refresh <30s crypto, <2min stocks
+   - 🎯 **Target**: Latenza massima definita per asset type
+
+#### **🔶 PRIORITÀ ALTA - ML ACCURACY:**
+4. **ML Predictions Accuracy**:
+   - ❌ **Problema**: Modelli non aggiornati ai prezzi correnti
+   - ✅ **Soluzione**: Training su dati live + validazione continua
+   - 🎯 **Target**: Predizioni coerenti con market state
+
+5. **Technical Analysis Sync**:
+   - ❌ **Problema**: Support/resistance basati su dati storici
+   - ✅ **Soluzione**: Calcoli dinamici su prezzi real-time
+   - 🎯 **Target**: Livelli tecnici sempre aggiornati
+
+### ⚡ **TARGET PERFORMANCE - FASE 2:**
+
+| **Asset Type** | **Current** | **Target** | **Provider** |
+|----------------|-------------|------------|--------------|
+| Crypto prices  | Variable    | <30 sec    | Binance, CoinGecko Pro |
+| Stock prices   | 15+ min     | <2 min     | Alpha Vantage Pro, Finnhub |
+| News analysis  | 30+ min     | <5 min     | NewsAPI Pro, real-time |
+| ML predictions | Batch       | Real-time  | Live model inference |
+
+### 🏗️ **IMPLEMENTAZIONE ROADMAP:**
+
+#### **FASE 2A - Dati Live (Priorità Immediata)**
+- [ ] API crypto real-time integration
+- [ ] Multi-provider fallback crypto/stock
+- [ ] Data validation & consistency checks
+- [ ] Price accuracy monitoring
+
+#### **FASE 2B - ML Accuracy (Priorità Alta)**  
+- [ ] ML model retraining on live data
+- [ ] Dynamic range calculations
+- [ ] Prediction validation system
+- [ ] Technical analysis real-time sync
+
+#### **FASE 2C - Advanced Features (Priorità Media)**
+- [ ] Cross-asset correlation live
+- [ ] Volatility forecasting
+- [ ] Options flow integration
+- [ ] Performance monitoring dashboard
+
+---
+
+## 🔧 **IMPLEMENTAZIONE ATTUALE**
+
+### ✅ **Funzionalità Complete (v3.0):**
+- ✅ Scheduling automatico 5 fasce orarie (08:00-18:00)
+- ✅ Evening Report 17:00 integrato con continuità narrativa
+- ✅ Sistema recovery automatico completo
+- ✅ Flag persistence su file/Gist per Render
+- ✅ API endpoints force-send per tutti i report
+- ✅ Weekend briefings (10:00, 15:00, 20:00)
+- ✅ Performance optimization + keep-alive
+- ✅ Multi-provider API fallback system
+
+### 🏗️ **Architettura Sistema:**
+```
+555-serverlite.py         # Core system + scheduling
+narrative_continuity.py   # Cross-message coherence  
+daily_session_tracker.py  # Session state management
+momentum_indicators.py    # Technical analysis
+api_fallback_config.py    # Multi-provider fallback
+performance_config.py     # Speed optimizations
+```
+
+### 🚀 **Deploy Info:**
+- **Platform**: Render.com
+- **Runtime**: Python 3.9+
+- **Dependencies**: Flask, requests, feedparser, pytz, yfinance
+- **Storage**: File-based + GitHub Gist backup
+- **Monitoring**: Health endpoints + debug API
+
+---
+
+## 📝 **UTILIZZO**
+
+### 🖥️ **Avvio Locale:**
+```bash
+python 555-serverlite.py
+```
+Server attivo su: `http://localhost:8000`
+
+### 🌐 **API Endpoints:**
+- `GET /` - Status sistema
+- `GET /health` - Health check
+- `GET /api/debug-status` - Debug completo
+- `GET /api/force-morning` - Forza Morning Report
+- `GET /api/force-lunch` - Forza Lunch Report  
+- `GET /api/force-evening` - Forza Evening Report ⭐ **NUOVO**
+- `GET /api/force-daily-summary` - Forza Daily Summary
+
+### ⚙️ **Variabili Ambiente:**
+```bash
+TELEGRAM_BOT_TOKEN=your_bot_token
+TELEGRAM_CHAT_ID=your_chat_id  
+RENDER_EXTERNAL_URL=your_render_url  # Per keep-alive
+GITHUB_TOKEN=your_token           # Per backup Gist (opzionale)
+```
+
+---
+
+## 🎯 **FOCUS ATTUALE:**
+
+> **PRIORITÀ ASSOLUTA**: Migliorare accuracy dati live e analisi ML per eliminare completamente range obsoleti (es. BTC 40k-50k quando è a 100k) e quotazioni mancanti, mantenendo la **struttura immutabile** e la **coerenza narrativa al 100%**.
+
+### 🆕 **STRUTTURA IMMUTABILE - NON MODIFICARE:**
+- **17 messaggi/giorno**: 7+3+3+3+1 🔒
+- **Orari fissi**: 08:00-09:00-13:00-17:00-18:00 🔒
+- **Continuità narrativa**: Coerenza tra tutti i messaggi 🔒
+- **Recovery system**: Backup automatico per tutti i report 🔒
+
+### 🚀 **PROSSIMI PASSI:**
+1. **Test domani** (30/10/2025) del nuovo flusso completo
+2. **Monitoring** Evening Report alle 17:00 e integrazione Daily Summary 18:00
+3. **Inizio Fase 2**: Upgrade dati live con priorità crypto real-time
+4. **ML accuracy improvement**: Validazione range dinamici
+
+**Sistema pronto per test completo e successivi upgrade incrementali verso dati real-time.**
+
+---
+
+*Ultima modifica: 29/10/2025 - v3.0 con Evening Report integrato e roadmap dati live*
 
 
 ## 📋 PANORAMICA SISTEMA
