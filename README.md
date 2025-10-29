@@ -1,8 +1,8 @@
 # 🚀 555-SERVERLITE - Advanced Financial News & ML Analytics System
 
-![Version](https://img.shields.io/badge/version-2.4--IMMUTABLE--STRUCTURE-brightgreen.svg)
-![Status](https://img.shields.io/badge/status-PRODUCTION--LOCKED-success.svg)
-![Messages](https://img.shields.io/badge/messages-16--DAILY--IMMUTABLE-blue.svg)
+![Version](https://img.shields.io/badge/version-2.5--NEW--SCHEDULE-brightgreen.svg)
+![Status](https://img.shields.io/badge/status-PRODUCTION--ACTIVE-success.svg)
+![Messages](https://img.shields.io/badge/messages-14--DAILY--OPTIMIZED-blue.svg)
 ![System](https://img.shields.io/badge/structure-DEFINITIVELY--LOCKED-red.svg)
 ![ML](https://img.shields.io/badge/ML-TRILOGY--ENHANCED-orange.svg)
 ![Platform](https://img.shields.io/badge/platform-Render--Optimized-purple.svg)
@@ -14,11 +14,11 @@
 
 La struttura del sistema è **COMPLETAMENTE IMMUTABILE** e rappresenta la **configurazione finale ottimizzata**:
 
-**📊 STRUTTURA BLINDATA (16 MESSAGGI/GIORNO):**
-- **07:00 Rassegna Stampa**: 7 messaggi sequenziali
+**📊 STRUTTURA AGGIORNATA (14 MESSAGGI/GIORNO):**
+- **08:00 Rassegna Stampa**: 7 messaggi sequenziali
 - **09:00 Morning Report**: 3 messaggi ML-enhanced  
 - **13:00 Lunch Report**: 3 messaggi intraday
-- **17:00 Evening Report**: 3 messaggi recap
+- **18:00 Daily Summary**: 1 messaggio riassuntivo completo
 
 ### ⛔ **RECOVERY SISTEMA OTTIMIZZATO**
 - Recovery interval: **30 minuti** (ottimizzato da 10min)
@@ -42,21 +42,21 @@ Il sistema è stato **perfezionato** attraverso iterazioni multiple e ha raggiun
 
 ### 🏆 **STRUTTURA PERFEZIONATA E IMMUTABILE**
 
-**📅 SCHEDULING DEFINITIVO:**
+**📅 SCHEDULING AGGIORNATO (29/10/2025):**
 ```
-07:00 - Rassegna Stampa   (7 messaggi)  → Analisi 24h completa
+08:00 - Rassegna Stampa   (7 messaggi)  → Analisi 24h completa
 09:00 - Morning Report    (3 messaggi)  → ML Market Pulse  
 13:00 - Lunch Report      (3 messaggi)  → Intraday Update
-17:00 - Evening Report    (3 messaggi)  → Daily Recap
+18:00 - Daily Summary     (1 messaggio) → Riassunto Giornata Completa
 ```
 
-**🎨 TOTALE GIORNALIERO: 16 MESSAGGI OTTIMIZZATI**
+**🎨 TOTALE GIORNALIERO: 14 MESSAGGI OTTIMIZZATI**
 
 ### 🔴 **MOTIVAZIONI DELL'IMMUTABILITÀ**
 
-1. **📊 Bilanciamento Perfetto**: 16 messaggi offrono copertura completa senza spam
-2. **⏰ Timing Ottimizzato**: Orari calibrati sui flussi di mercato
-3. **📱 User Experience**: Numero ideale per mantenere engagement
+1. **📊 Bilanciamento Ottimizzato**: 14 messaggi offrono copertura completa senza spam
+2. **⏰ Timing Migliorato**: Rassegna 08:00 + Daily Summary 18:00 per flussi ottimali
+3. **📱 User Experience**: Riassunto giornaliero completo alle 18:00
 4. **⚙️ Performance**: Struttura ottimizzata per rate limit Telegram
 5. **🔄 Recovery System**: Grace period calibrato per sequenze complete
 
@@ -77,12 +77,12 @@ Il sistema è stato **perfezionato** attraverso iterazioni multiple e ha raggiun
 
 **ATTENZIONE**: La struttura oraria e il numero di messaggi di seguito specificata è **DEFINITIVA e IMMUTABILE**. **NON è autorizzato alcun cambiamento** senza esplicita approvazione:
 
-🔒 **STRUTTURA BLINDATA:**
-- **RASSEGNA STAMPA (07:00)**: **7 messaggi** - IMMUTABILE
-- **MORNING REPORT (09:00)**: **3 messaggi** - IMMUTABILE
-- **NOON REPORT (13:00)**: **3 messaggi** - IMMUTABILE
-- **EVENING REPORT (17:00)**: **3 messaggi** - IMMUTABILE
-- **WEEKEND REPORTS**: **2 messaggi** ciascuno - IMMUTABILE
+🔒 **STRUTTURA AGGIORNATA:**
+- **RASSEGNA STAMPA (08:00)**: **7 messaggi** - AGGIORNATO
+- **MORNING REPORT (09:00)**: **3 messaggi** - INVARIATO
+- **LUNCH REPORT (13:00)**: **3 messaggi** - INVARIATO
+- **DAILY SUMMARY (18:00)**: **1 messaggio** - NUOVO
+- **WEEKEND REPORTS**: **2 messaggi** ciascuno - INVARIATO
 
 ### ⚠️ **REGOLE INVIOLABILI:**
 1. 📊 **Numero messaggi**: Mai cambiare il numero di messaggi per report
@@ -168,15 +168,15 @@ API Alpha Vantage fail → Finnhub → TwelveData → Dati REALI!
 
 ### 🚨 **QUESTA TABELLA È DEFINITIVA - NON MODIFICARE** 🚨
 
-### 🏢 **GIORNI LAVORATIVI (Lun-Ven) - TRILOGY ML v2.4**
+### 🏢 **GIORNI LAVORATIVI (Lun-Ven) - NUOVO SCHEDULE v2.5**
 | **Orario** | **Tipo** | **Messaggi** | **Descrizione** |
 |------------|----------|--------------|----------------|
-| **07:00** | 📰 Rassegna Stampa | **7 messaggi** | Analisi completa 24h + ML + Trading signals |
-| **07:00** | 🌅 Morning Report | **3 messaggi** | 🚀 **ML Enhanced**: Crypto Tech + Regime + Signals |
-| **13:00** | 🌆 Noon Report | **3 messaggi** | 🚀 **ML Aligned**: Session Continuity + Intraday ML |
-| **17:00** | 🌇 Evening Report | **3 messaggi** | 🚀 **ML Aligned**: Daily Summary + Tomorrow ML |
+| **08:00** | 📰 Rassegna Stampa | **7 messaggi** | Analisi completa 24h + ML + Trading signals |
+| **09:00** | 🌅 Morning Report | **3 messaggi** | 🚀 **ML Enhanced**: Crypto Tech + Regime + Signals |
+| **13:00** | 🍽️ Lunch Report | **3 messaggi** | 🚀 **ML Aligned**: Session Continuity + Intraday ML |
+| **18:00** | 📋 Daily Summary | **1 messaggio** | 🆕 **Riassunto Completo**: Giornata + Top News + Outlook |
 
-**Total**: **16 messaggi/giorno** ⬆️ da 10
+**Total**: **14 messaggi/giorno** ⬇️ Ottimizzato da 16
 
 ### 🏖️ **WEEKEND (Sab-Dom) - ENHANCED v2.3**
 | **Orario** | **Tipo** | **Messaggi** | **Descrizione** |
@@ -187,13 +187,14 @@ API Alpha Vantage fail → Finnhub → TwelveData → Dati REALI!
 
 **Total**: **12 messaggi/weekend** ⬆️ da 6 (6 sabato + 6 domenica)
 
-### 🆕 **CHANGELOG v2.4 TRILOGY ML + API FALLBACK (28/10/2025) - STRUTTURA IMMUTABILE** 🚀
+### 🆕 **CHANGELOG v2.5 NEW SCHEDULE + DAILY SUMMARY (29/10/2025)** 🚀
 
-🔒 **IMMUTABILITÀ STRUTTURALE CONFERMATA**:
-- ✅ **RECOVERY SYSTEM**: Ottimizzato da 10 a 30 minuti per sequenze complete
-- ✅ **STRUTTURA 16 MESSAGGI**: Definitivamente consolidata e blindata
-- ✅ **CODICE CLEANUP**: Rimosso codice orfano, sintassi verificata
-- ✅ **FOCUS QUALITÀ**: Priorità su miglioramenti contenuti vs modifiche strutturali
+🆕 **NUOVA SCHEDULAZIONE OTTIMIZZATA**:
+- ✅ **RASSEGNA STAMPA**: Spostata da 07:00 a 08:00 per timing migliorato
+- ✅ **DAILY SUMMARY**: Nuovo messaggio alle 18:00 con riassunto giornata completa
+- ✅ **MESSAGGI OTTIMIZZATI**: Da 16 a 14 messaggi/giorno per efficienza
+- ✅ **RECOVERY SYSTEM**: Aggiornato per nuovi orari e daily summary
+- ✅ **ENDPOINT API**: Nuovo /api/force-daily-summary per test
 
 🚀 **SISTEMA ML + API FALLBACK**:
 - 🚀 **TRILOGY ML UNIFIED**: Morning-Noon-Evening completamente allineati con stesso sistema ML
@@ -224,10 +225,8 @@ API Alpha Vantage fail → Finnhub → TwelveData → Dati REALI!
 2. **ML Sentiment**: 🔹 **ML reuse** + momentum updates + catalyst analysis + risk assessment intraday
 3. **Trading Signals**: 🔹 **Aligned ML signals** + intraday timing + catalyst impact + momentum guidance
 
-### 🌇 **Evening Report 17:00 (3 messaggi) - ML ALIGNED** 🚀 🔒
-1. **Wall Street Close**: US market recap + sector performance + volume analysis
-2. **Daily Recap**: 🔹 **ML Daily Summary** - Regime confirmation + signals performance + category analysis + session consistency
-3. **Tomorrow Setup**: 🔹 **ML Tomorrow Predictions** - Regime continuation + momentum carry + risk level + priority signals
+### 📋 **Daily Summary 18:00 (1 messaggio) - RIASSUNTO COMPLETO** 🆕 🔒
+1. **Riassunto Giornata Completa**: 🔹 **Recap messaggi inviati** + sintesi mercati + ML consensus + top news + sector rotation + outlook domani con programma completo
 
 ### 🏖️ **Weekend Reports (2 messaggi each) ✅ IMPLEMENTED**
 
@@ -430,10 +429,10 @@ Session Tracking → Narrative Continuity → Performance Analytics
 
 ### 🏆 **Summary v2.4 TRILOGY ML + API FALLBACK DEPLOYMENT** 🚀
 
-**555-SERVERLITE ML Trilogy + API Fallback** è ora **COMPLETAMENTE DEPLOYATO IN PRODUZIONE**:
-- **Lunedì-Venerdì**: 16 msg/giorno ML-enhanced × 5 giorni = **80 messaggi**
+**555-SERVERLITE NEW SCHEDULE v2.5** è ora **COMPLETAMENTE DEPLOYATO IN PRODUZIONE**:
+- **Lunedì-Venerdì**: 14 msg/giorno ottimizzati × 5 giorni = **70 messaggi**
 - **Weekend**: 12 msg/weekend enhanced × 1 weekend = **12 messaggi**  
-- **TOTALE SETTIMANALE**: **92 messaggi ML-powered** con session continuity
+- **TOTALE SETTIMANALE**: **82 messaggi ottimizzati** con daily summary
 
 **🚀 v2.4 Production Features Active**:
 ✅ **Trilogy ML Alignment**: Morning-Noon-Evening unified system  
@@ -446,9 +445,9 @@ Session Tracking → Narrative Continuity → Performance Analytics
 ✅ **Auto-Deploy**: GitHub Actions production pipeline active  
 ✅ **Repository Optimized**: Clean structure + duplicate-free  
 
-**🎨 Status**: **v2.4 TRILOGY ML + API FALLBACK OPERATIVO** - Sistema unificato ML con 95% consistency + 99.9% data reliability!
+**🎨 Status**: **v2.5 NEW SCHEDULE OPERATIVO** - Scheduling ottimizzato con Daily Summary completo + timing migliorato!
 
-**🔒 Struttura**: **IMMUTABILE E DEFINITIVA** - 16 messaggi/giorno ottimizzati, recovery 30min, focus su qualità!
+**🔒 Struttura**: **AGGIORNATA E OTTIMIZZATA** - 14 messaggi/giorno, rassegna 08:00, daily summary 18:00, focus su efficienza!
 
 ---
 ```bash
