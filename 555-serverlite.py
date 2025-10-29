@@ -146,10 +146,11 @@ SCHEDULE = {
     "rassegna": "08:00",
     "morning":  "09:00",
     "lunch":    "13:00",
-    "daily_summary":  "18:00",  # Nuovo: riassunto giornaliero
+    "evening":  "17:00",  # Nuovo: Evening Report (3 messaggi)
+    "daily_summary":  "18:00",  # Riassunto giornaliero finale
 }
 RECOVERY_INTERVAL_MINUTES = 30
-RECOVERY_WINDOWS = {"rassegna": 60, "morning": 80, "lunch": 80, "daily_summary": 80}
+RECOVERY_WINDOWS = {"rassegna": 60, "morning": 80, "lunch": 80, "evening": 80, "daily_summary": 80}
 LAST_RUN = {}  # per-minute debounce
 
 # === CONTROLLO MEMORIA E PERFORMANCE ===
@@ -180,11 +181,11 @@ PRESS_REVIEW_HISTORY_FILE = os.path.join('salvataggi', 'press_review_history.jso
 
 # Variabili globali per tracciare invii giornalieri
 GLOBAL_FLAGS = {
-    "rassegna_sent": False,          # Nuovo flag per rassegna 08:00
-    "morning_news_sent": False,
-    "daily_report_sent": False,      # Lunch 13:00
-    "daily_summary_sent": False,     # Nuovo: riassunto giornaliero 18:00 
-    "evening_report_sent": False,    # Deprecated - da rimuovere
+    "rassegna_sent": False,          # Rassegna 08:00 (7 messaggi)
+    "morning_news_sent": False,      # Morning 09:00 (3 messaggi)
+    "daily_report_sent": False,      # Lunch 13:00 (3 messaggi)
+    "evening_report_sent": False,    # Evening 17:00 (3 messaggi) - RIATTIVATO
+    "daily_summary_sent": False,     # Daily Summary 18:00 (1 messaggio finale)
     "weekly_report_sent": False,
     "monthly_report_sent": False,
     "quarterly_report_sent": False,
@@ -8687,6 +8688,18 @@ def _recovery_tick():
         except Exception as e:
             print(f"❌ [RECOVERY] Errore lunch: {e}")
 
+    # Evening
+    if _should_attempt_recovery("evening_report") and _within(SCHEDULE["evening"], RECOVERY_WINDOWS["evening"]):
+        print(f"🔄 [RECOVERY] Tentativo recovery evening - {hm}")
+        try:
+            LAST_RECOVERY_ATTEMPT[f"evening_report_{today_key}"] = hm
+            generate_evening_report()
+            set_message_sent_flag("evening_report")
+            save_daily_flags()
+            print(f"✅ [RECOVERY] Evening inviato con successo - {hm}")
+        except Exception as e:
+            print(f"❌ [RECOVERY] Errore evening: {e}")
+
     # Daily Summary
     if _should_attempt_recovery("daily_summary") and _within(SCHEDULE["daily_summary"], RECOVERY_WINDOWS["daily_summary"]):
         print(f"🔄 [RECOVERY] Tentativo recovery daily summary - {hm}")
@@ -8759,7 +8772,18 @@ def check_and_send_scheduled_messages():
         except Exception as e:
             print(f"❌ [SCHEDULER] Errore lunch: {e}")
 
-    # DAILY SUMMARY 18:00 - NUOVO SISTEMA
+    # EVENING 17:00 - NUOVO: 3 messaggi per analisi close
+    if current_time == SCHEDULE["evening"] and not is_message_sent_today("evening_report") and LAST_RUN.get("evening") != now_key:
+        print("🌆 [SCHEDULER] Avvio evening report (17:00 - 3 messaggi)...")
+        try:
+            LAST_RUN["evening"] = now_key
+            generate_evening_report()
+            set_message_sent_flag("evening_report"); 
+            save_daily_flags()
+        except Exception as e:
+            print(f"❌ [SCHEDULER] Errore evening: {e}")
+
+    # DAILY SUMMARY 18:00 - SISTEMA FINALE
     if current_time == SCHEDULE["daily_summary"] and not is_message_sent_today("daily_summary") and LAST_RUN.get("daily_summary") != now_key:
         print("📋 [SCHEDULER] Avvio daily summary (riassunto giornaliero completo)...")
         try:
