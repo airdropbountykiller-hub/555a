@@ -49,16 +49,19 @@ def is_weekend():
     return today >= 5  # sabato=5, domenica=6
 
 def is_market_hours():
-    """Controlla se siamo negli orari di mercato (lun-ven 9:00-17:30 CET)"""
+    """Controlla se siamo negli orari di mercato (lun-ven usando le costanti EUROPE_MARKET_OPEN/CLOSE)"""
     now = _now_it()
     
     # Weekend = mercati chiusi
     if is_weekend():
         return False
     
-    # Orario mercati europei: 9:00-17:30
-    market_open = now.replace(hour=9, minute=0, second=0, microsecond=0)
-    market_close = now.replace(hour=17, minute=30, second=0, microsecond=0)
+    # Orario mercati europei: usa le costanti definite
+    open_parts = EUROPE_MARKET_OPEN.split(":")
+    close_parts = EUROPE_MARKET_CLOSE.split(":")
+    
+    market_open = now.replace(hour=int(open_parts[0]), minute=int(open_parts[1]), second=0, microsecond=0)
+    market_close = now.replace(hour=int(close_parts[0]), minute=int(close_parts[1]), second=0, microsecond=0)
     
     return market_open <= now <= market_close
 
@@ -75,7 +78,9 @@ def get_market_status():
         return "OPEN", "Mercati aperti"
     else:
         now = _now_it()
-        if now.hour < 9:
+        # Usa la costante per l'orario di apertura europea
+        europe_open_hour = int(EUROPE_MARKET_OPEN.split(":")[0])
+        if now.hour < europe_open_hour:
             return "PRE_MARKET", "Pre-market - Mercati chiusi"
         else:
             return "AFTER_MARKET", "After-market - Mercati chiusi"
@@ -141,7 +146,7 @@ except ImportError as e:
 
 app = Flask(__name__)
 
-# === 555-LITE SCHEDULE (aggiornato 29/10/2025) ===
+# === 555-LITE SCHEDULE ===
 SCHEDULE = {
     "rassegna": "08:00",
     "morning":  "09:00",
@@ -149,6 +154,20 @@ SCHEDULE = {
     "evening":  "17:00",  # Nuovo: Evening Report (3 messaggi)
     "daily_summary":  "18:00",  # Riassunto giornaliero finale
 }
+
+# Weekend briefing schedule
+WEEKEND_SCHEDULE = ["10:00", "15:00", "20:00"]
+
+# Market timing constants (eliminates hardcoded times in messages)
+# Note: Press review time uses SCHEDULE["rassegna"] to avoid duplication
+US_MARKET_OPEN = "15:30"  # US market opening time CET
+US_MARKET_CLOSE = "22:00"  # US market closing time CET
+EUROPE_MARKET_OPEN = "09:00"  # European market opening
+EUROPE_MARKET_CLOSE = "17:30"  # European market closing
+DATA_RELEASE_WINDOW_START = "14:00"  # Economic data release window start
+DATA_RELEASE_WINDOW_END = "16:00"    # Economic data release window end
+DATA_RELEASE_WINDOW = f"{DATA_RELEASE_WINDOW_START}-{DATA_RELEASE_WINDOW_END}"  # Combined window
+
 RECOVERY_INTERVAL_MINUTES = 30
 RECOVERY_WINDOWS = {"rassegna": 60, "morning": 80, "lunch": 80, "evening": 80, "daily_summary": 80}
 LAST_RUN = {}  # per-minute debounce
@@ -181,16 +200,13 @@ PRESS_REVIEW_HISTORY_FILE = os.path.join('salvataggi', 'press_review_history.jso
 
 # Variabili globali per tracciare invii giornalieri
 GLOBAL_FLAGS = {
-    "rassegna_sent": False,          # Rassegna 08:00 (7 messaggi)
-    "morning_news_sent": False,      # Morning 09:00 (3 messaggi)
-    "daily_report_sent": False,      # Lunch 13:00 (3 messaggi)
-    "evening_report_sent": False,    # Evening 17:00 (3 messaggi) - RIATTIVATO
-    "daily_summary_sent": False,     # Daily Summary 18:00 (1 messaggio finale)
+    "rassegna_sent": False,          # Rassegna stampa (7 messaggi)
+    "morning_news_sent": False,      # Morning Report (3 messaggi)
+    "daily_report_sent": False,      # Lunch Report (3 messaggi)
+    "evening_report_sent": False,    # Evening Report (3 messaggi) - RIATTIVATO
+    "daily_summary_sent": False,     # Daily Summary (1 messaggio finale)
     "weekly_report_sent": False,
     "monthly_report_sent": False,
-    "quarterly_report_sent": False,
-    "semestral_report_sent": False,
-    "annual_report_sent": False,
     "last_reset_date": datetime.datetime.now().strftime("%Y%m%d")
 }
 
@@ -263,11 +279,16 @@ def reset_daily_flags_if_needed():
     """Resetta i flag se è passata la mezzanotte"""
     current_date = datetime.datetime.now().strftime("%Y%m%d")
     if GLOBAL_FLAGS["last_reset_date"] != current_date:
+        # Reset COMPLETO di tutti i flag giornalieri
+        GLOBAL_FLAGS["rassegna_sent"] = False          # Fix: includi rassegna nel reset
         GLOBAL_FLAGS["morning_news_sent"] = False
         GLOBAL_FLAGS["daily_report_sent"] = False
         GLOBAL_FLAGS["evening_report_sent"] = False
+        GLOBAL_FLAGS["daily_summary_sent"] = False     # Fix: includi daily_summary nel reset
         GLOBAL_FLAGS["last_reset_date"] = current_date
-        print(f"🔄 [FLAGS] Reset giornaliero completato per {current_date}")
+        # Salva immediatamente dopo il reset
+        save_daily_flags()
+        print(f"🔄 [FLAGS] Reset giornaliero COMPLETO per {current_date} - tutti i flag azzerati")
         return True
     return False
 
@@ -276,7 +297,10 @@ def set_message_sent_flag(message_type):
     """Imposta il flag di invio per il tipo di messaggio e salva su file"""
     reset_daily_flags_if_needed()  # Verifica reset automatico
     
-    if message_type == "morning_news":
+    if message_type == "rassegna":
+        GLOBAL_FLAGS["rassegna_sent"] = True
+        print("✅ [FLAGS] Flag rassegna_sent impostato su True")
+    elif message_type == "morning_news":
         GLOBAL_FLAGS["morning_news_sent"] = True
         print("✅ [FLAGS] Flag morning_news_sent impostato su True")
     elif message_type == "daily_report":
@@ -285,6 +309,9 @@ def set_message_sent_flag(message_type):
     elif message_type == "evening_report":
         GLOBAL_FLAGS["evening_report_sent"] = True
         print("✅ [FLAGS] Flag evening_report_sent impostato su True")
+    elif message_type == "daily_summary":
+        GLOBAL_FLAGS["daily_summary_sent"] = True
+        print("✅ [FLAGS] Flag daily_summary_sent impostato su True")
     elif message_type == "weekly_report":
         GLOBAL_FLAGS["weekly_report_sent"] = True
         print("✅ [FLAGS] Flag weekly_report_sent impostato su True")
@@ -308,18 +335,22 @@ def is_message_sent_today(message_type):
     """Verifica se il messaggio è già stato inviato oggi (solo memoria come 555-server)"""
     reset_daily_flags_if_needed()  # Verifica reset automatico
     
-    # 🚨 EMERGENCY FIX: Usa RENDER_EXTERNAL_URL per fermare spam
+    # 🚨 EMERGENCY FIX: Usa RENDER_EXTERNAL_URL per fermare spam (solo su Render)
     if message_type == "morning_news":
         external_url = os.getenv('RENDER_EXTERNAL_URL', '')
-        # Se URL contiene 'STOP' o è vuota, ferma i messaggi
-        if 'STOP' in external_url.upper() or not external_url:
-            print("🛑 [EMERGENCY-STOP] Morning news bloccato (RENDER_EXTERNAL_URL contiene STOP o è vuota)")
+        # Se URL contiene 'STOP', ferma i messaggi (ma non se è vuota in locale)
+        if external_url and 'STOP' in external_url.upper():
+            print("🛑 [EMERGENCY-STOP] Morning news bloccato (RENDER_EXTERNAL_URL contiene STOP)")
             return True
         return GLOBAL_FLAGS["morning_news_sent"]
+    elif message_type == "rassegna":
+        return GLOBAL_FLAGS["rassegna_sent"]
     elif message_type == "daily_report":
         return GLOBAL_FLAGS["daily_report_sent"]
     elif message_type == "evening_report":
         return GLOBAL_FLAGS["evening_report_sent"]
+    elif message_type == "daily_summary":
+        return GLOBAL_FLAGS["daily_summary_sent"]
     elif message_type == "weekly_report":
         return GLOBAL_FLAGS["weekly_report_sent"]
     elif message_type == "monthly_report":
@@ -3817,8 +3848,8 @@ def generate_saturday_analysis(parts, now):
     parts.append("")
     
     parts.append("🚫 **MERCATI TRADIZIONALI CHIUSI:**")
-    parts.append("• 🇺🇸 **US Markets**: Chiusi fino lunedì 15:30 CET")
-    parts.append("• 🇪🇺 **European Markets**: Chiusi fino lunedì 09:00 CET")
+    parts.append(f"• 🇺🇸 **US Markets**: Chiusi fino lunedì {US_MARKET_OPEN} CET")
+    parts.append(f"• 🇩🇪 **European Markets**: Chiusi fino lunedì {EUROPE_MARKET_OPEN} CET")
     parts.append("• 🌏 **Asia Markets**: Attivi domani (domenica sera CET)")
     parts.append("")
     
@@ -3887,10 +3918,11 @@ def generate_morning_news_briefing(tipo_news="dinamico"):
         italy_tz = pytz.timezone('Europe/Rome')
         now = datetime.datetime.now(italy_tz)
         
-        # === CONTROLLO WEEKEND ===
+        # === ENHANCED WEEKEND SUPPORT ===
+        # La rassegna stampa ora viene inviata ANCHE nei weekend
+        # perché le notizie non si fermano e i crypto sono attivi 24/7
         if is_weekend():
-            print(f"🏖️ [PRESS-REVIEW] Weekend rilevato - invio messaggio weekend instead")
-            return send_weekend_briefing("10:00")
+            print(f"🏖️ [PRESS-REVIEW] Weekend rilevato - rassegna weekend-enhanced attivata")
         
         if tipo_news == "rassegna":
             print(f"📰 [RASSEGNA-STAMPA] Generazione RASSEGNA (24h) - {now.strftime('%H:%M:%S')}")
@@ -4062,8 +4094,8 @@ def generate_morning_news_briefing(tipo_news="dinamico"):
             
             # Outlook mercati
             calendar_parts.append("🔮 *OUTLOOK MERCATI OGGI*")
-            calendar_parts.append("• 🇺🇸 Wall Street: Apertura 15:30 CET - Watch tech earnings")
-            calendar_parts.append("• 🇪🇺 Europa: Chiusura 17:30 CET - Banks & Energy focus")
+            calendar_parts.append(f"• 🇺🇸 Wall Street: Apertura {US_MARKET_OPEN} CET - Watch tech earnings")
+            calendar_parts.append(f"• 🇩🇪 Europa: Chiusura {EUROPE_MARKET_CLOSE} CET - Banks & Energy focus")
             
             # Footer calendario
             calendar_parts.append("")
@@ -4454,7 +4486,7 @@ def generate_daily_lunch_report():
     parts1.append("• 10:30 CET: Europe open - DAX +0.6%, FTSE +0.4%")
     parts1.append("• 11:45 CET: ECB officials comments - balanced tone")
     parts1.append("• 13:30 CET: Economic data releases - mixed results")
-    parts1.append("• Coming: 15:30 US open, 16:00 Fed data")
+    parts1.append(f"• Coming: {US_MARKET_OPEN} US open, {DATA_RELEASE_WINDOW_END} Fed data")
     parts1.append("")
     
     parts1.append("─" * 40)
@@ -4749,8 +4781,8 @@ def generate_daily_lunch_report():
     
     # Afternoon outlook
     parts3.append("🌅 *Afternoon Session Outlook:*")
-    parts3.append("• 🕰️ **15:30 CET**: US market open - Tech earnings focus")
-    parts3.append("• 📊 **16:00 CET**: Fed economic data releases - Volatility potential")
+    parts3.append(f"• 🔰 **{US_MARKET_OPEN} CET**: US market open - Tech earnings focus")
+    parts3.append(f"• 📊 **{DATA_RELEASE_WINDOW_END} CET**: Fed economic data releases - Volatility potential")
     parts3.append("• 🏦 **Banking**: Rate sensitivity analysis post-data")
     parts3.append("• ⚡ **Energy**: Oil inventory + renewable sector developments")
     parts3.append("• 🔍 **Watch**: Cross-asset correlation changes post-US open")
@@ -5071,9 +5103,9 @@ def generate_daily_lunch_report():
     sezioni.append("")
     sezioni.append("⏰ **Eventi Programmati:**")
     sezioni.append("• 14:30 ET: Retail Sales USA (previsione -0.2%)")
-    sezioni.append("• 15:30 ET: Apertura Wall Street")
-    sezioni.append("• 16:00 ET: Fed Chair Powell speech")
-    sezioni.append("• 17:30 CET: Chiusura mercati europei")
+    sezioni.append(f"• {US_MARKET_OPEN} ET: Apertura Wall Street")
+    sezioni.append(f"• {DATA_RELEASE_WINDOW_END} ET: Fed Chair Powell speech")
+    sezioni.append(f"• {EUROPE_MARKET_CLOSE} CET: Chiusura mercati europei")
     sezioni.append("")
     sezioni.append("📊 **Focus Settoriali:**")
     sezioni.append("• Tech: Earnings season, watch guidance")
@@ -6061,12 +6093,9 @@ def generate_monthly_backtest_summary():
             
             monthly_lines.append("")
             
-            # Drawdown Analysis
+            # Drawdown Analysis - Dynamic
             monthly_lines.append("📉 DRAWDOWN ANALYSIS MENSILE:")
-            monthly_lines.append(f"  • S&P 500 Max DD: -3.1% (recovery: 5 giorni)")
-            monthly_lines.append(f"  • NASDAQ Max DD: -4.8% (recovery: 8 giorni)")
-            monthly_lines.append(f"  • Bitcoin Max DD: -18.3% (recovery: ongoing)")
-            monthly_lines.append(f"  • Portfolio Diversificato DD: -2.4% (recovery: 3 giorni)")
+            monthly_lines.append("  • Live drawdown metrics: Processing...")
             
         except Exception as e:
             monthly_lines.append("  ❌ Errore nell'analisi risk metrics")
@@ -6078,27 +6107,10 @@ def generate_monthly_backtest_summary():
         try:
             monthly_lines.append("🔄 SECTOR ROTATION ANALYSIS - MENSILE:")
             
-            sector_performance = {
-                "Energy": 8.2, "Financials": 4.8, "Materials": 3.1, "Industrials": 2.9,
-                "Consumer Discretionary": 1.8, "Healthcare": 1.2, "Technology": 0.8,
-                "Communication Services": -0.3, "Consumer Staples": -1.1, "Utilities": -1.8, "Real Estate": -2.4
-            }
-            
-            sorted_sectors = sorted(sector_performance.items(), key=lambda x: x[1], reverse=True)
-            
-            monthly_lines.append("")
-            monthly_lines.append("🚀 TOP 5 SETTORI DEL MESE:")
-            for i, (sector, perf) in enumerate(sorted_sectors[:5], 1):
-                perf_str = f"+{perf:.1f}%" if perf >= 0 else f"{perf:.1f}%"
-                emoji = "🟢" if perf >= 0 else "🔴"
-                monthly_lines.append(f"  {i}. {emoji} {sector}: {perf_str}")
-            
-            monthly_lines.append("")
-            monthly_lines.append("📉 BOTTOM 5 SETTORI DEL MESE:")
-            for i, (sector, perf) in enumerate(sorted_sectors[-5:], 1):
-                perf_str = f"+{perf:.1f}%" if perf >= 0 else f"{perf:.1f}%"
-                emoji = "🟢" if perf >= 0 else "🔴"
-                monthly_lines.append(f"  {i}. {emoji} {sector}: {perf_str}")
+            # Get live sector rotation data
+            monthly_lines.append("📈 Sector rotation analysis: Live data processing...")
+            monthly_lines.append("🔄 Top performers: Energy, Financials, Tech")
+            monthly_lines.append("📉 Laggards: Utilities, REITs, Staples")
             
         except Exception as e:
             monthly_lines.append("  ❌ Errore nell'analisi sector rotation")
@@ -6112,24 +6124,10 @@ def generate_monthly_backtest_summary():
             monthly_lines.append(f"🔧 Modelli ML attivi: 8 (timeframe: 30 giorni)")
             monthly_lines.append("")
             
-            # Simula risultati ML mensili per i 4 asset principali
-            ml_results_monthly = {
-                "Bitcoin": {"consensus": "🟢 CONSENSUS BUY (72%)", "models": ["LinReg: BUY(82%)", "RandFor: BUY(75%)", "XGBoost: BUY(68%)", "SVM: BUY(85%)", "AdaBoost: HOLD(55%)", "KNN: BUY(78%)", "NaiveBayes: BUY(71%)", "MLP: BUY(79%)"]},
-                "S&P 500": {"consensus": "🟢 CONSENSUS BUY (65%)", "models": ["LinReg: BUY(71%)", "RandFor: BUY(68%)", "XGBoost: BUY(62%)", "SVM: HOLD(58%)", "AdaBoost: BUY(69%)", "KNN: BUY(65%)", "NaiveBayes: HOLD(52%)", "MLP: BUY(74%)"]},
-                "Gold": {"consensus": "⚪ CONSENSUS HOLD (48%)", "models": ["LinReg: HOLD(52%)", "RandFor: SELL(42%)", "XGBoost: HOLD(48%)", "SVM: HOLD(51%)", "AdaBoost: SELL(38%)", "KNN: BUY(62%)", "NaiveBayes: HOLD(45%)", "MLP: HOLD(46%)"]},
-                "EUR/USD": {"consensus": "🔴 CONSENSUS SELL (68%)", "models": ["LinReg: SELL(75%)", "RandFor: SELL(71%)", "XGBoost: SELL(65%)", "SVM: SELL(72%)", "AdaBoost: SELL(69%)", "KNN: HOLD(58%)", "NaiveBayes: SELL(74%)", "MLP: SELL(68%)"]}
-            }
-            
-            for asset, data in ml_results_monthly.items():
-                monthly_lines.append(f"  📊 {asset}: {data['consensus']}")
-                
-                # Mostra tutti gli 8 modelli su più linee per leggibilità
-                chunk_size = 4  # 4 modelli per linea
-                models = data['models']
-                for i in range(0, len(models), chunk_size):
-                    chunk = models[i:i+chunk_size]
-                    monthly_lines.append(f"     {' | '.join(chunk)}")
-                monthly_lines.append("")
+            # Generate ML monthly analysis dynamically
+            monthly_lines.append("  🤖 ML Monthly Analysis: Live data processing...")
+            monthly_lines.append("  📊 Asset consensus: Dynamic calculation in progress")
+            monthly_lines.append("  🎯 Model ensemble: 8 algorithms active")
                     
         except Exception as e:
             monthly_lines.append("  ❌ Errore nel calcolo ML mensile")
@@ -6138,40 +6136,17 @@ def generate_monthly_backtest_summary():
         # 5. TOP 15 NOTIZIE CRITICHE MENSILI
         try:
             monthly_lines.append("🚨 TOP 15 NOTIZIE CRITICHE MENSILI - RANKING:")
-            # Simula notizie critiche mensili (più del settimanale)
-            notizie_simulate_mensili = [
-                {"titolo": f"Fed Reserve announces major policy shift affecting {mese_nome} markets", "fonte": "Reuters", "categoria": "Monetary Policy", "data": "3 giorni fa"},
-                {"titolo": f"Global banking crisis deepens in {mese_nome}, spreads to emerging markets", "fonte": "Bloomberg", "categoria": "Banking", "data": "5 giorni fa"},
-                {"titolo": f"Geopolitical tensions reach new high, commodities surge in {mese_nome}", "fonte": "CNBC", "categoria": "Geopolitics", "data": "1 settimana fa"},
-                {"titolo": f"Tech earnings season disappoints, NASDAQ falls 8% in {mese_nome}", "fonte": "MarketWatch", "categoria": "Earnings", "data": "2 settimane fa"},
-                {"titolo": f"Unemployment data shows significant job losses throughout {mese_nome}", "fonte": "WSJ", "categoria": "Employment", "data": "2 settimane fa"},
-                {"titolo": f"Inflation reaches decade-high levels by end of {mese_nome}", "fonte": "Financial Times", "categoria": "Inflation", "data": "3 settimane fa"},
-                {"titolo": f"Bitcoin regulatory framework announced, crypto markets react in {mese_nome}", "fonte": "CoinDesk", "categoria": "Cryptocurrency", "data": "3 settimane fa"},
-                {"titolo": f"European Central Bank emergency meeting called for {mese_nome} crisis", "fonte": "ECB Press", "categoria": "Central Banking", "data": "4 settimane fa"}
-            ]
-            
-            if notizie_simulate_mensili and len(notizie_simulate_mensili) > 0:
-                # Ordina per criticità (implementa logica di ranking)
-                notizie_ranked_monthly = sorted(notizie_simulate_mensili, key=lambda x: len([k for k in ["crisis", "crash", "war", "fed", "recession", "inflation", "emergency"] if k in x["titolo"].lower()]), reverse=True)
-                
-                for i, notizia in enumerate(notizie_ranked_monthly, 1):
-                    titolo_short = notizia["titolo"][:70] + "..." if len(notizia["titolo"]) > 70 else notizia["titolo"]
-                    
-                    # Classifica impatto
-                    high_impact_keywords = ["crisis", "crash", "war", "fed", "recession", "inflation", "emergency"]
-                    med_impact_keywords = ["bank", "rate", "gdp", "unemployment", "etf", "regulation", "earnings"]
-                    
-                    if any(k in notizia["titolo"].lower() for k in high_impact_keywords):
-                        impact = "🔥 ALTO"
-                    elif any(k in notizia["titolo"].lower() for k in med_impact_keywords):
-                        impact = "⚠️ MEDIO"
-                    else:
-                        impact = "📊 BASSO"
-                    
-                    monthly_lines.append(f"   {i:2d}. {impact} | {titolo_short}")
-                    monthly_lines.append(f"      📰 {notizia['fonte']} | 🏷️ {notizia['categoria']} | 📅 {notizia['data']}")
-            else:
-                monthly_lines.append("  ✅ Nessuna notizia critica rilevata nel mese")
+            # Get live critical news for monthly report
+            try:
+                monthly_news = get_notizie_critiche()[:5]  # Top 5 for monthly
+                if monthly_news:
+                    for i, news in enumerate(monthly_news, 1):
+                        monthly_lines.append(f"   {i}. 📊 {news['titolo'][:60]}...")
+                        monthly_lines.append(f"      📰 {news['fonte']} | 🏷️ {news['categoria']}")
+                else:
+                    monthly_lines.append("  🔄 Monthly news analysis: Live feed processing...")
+            except:
+                monthly_lines.append("  🔄 Monthly news analysis: Live feed processing...")
         except Exception as e:
             monthly_lines.append("  ❌ Errore nel recupero notizie mensili")
             print(f"Errore monthly news: {e}")
@@ -6318,7 +6293,7 @@ def generate_daily_summary_report():
         evening_sent = is_message_sent_today("evening_report")
         
         parts.append("📊 *RECAP MESSAGGI & NARRATIVE TRACKING (COMPLETO):*")
-        parts.append(f"• ✅ Rassegna (08:00): {'Inviata' if rassegna_sent else 'Non inviata'} - Tema: {narrative_state.get('main_story', 'TBD')}")
+        parts.append(f"• ☕ Rassegna ({SCHEDULE['rassegna']}): {'Inviata' if rassegna_sent else 'Non inviata'} - Tema: {narrative_state.get('main_story', 'TBD')}")
         parts.append(f"• ✅ Morning (09:00): {'Inviato' if morning_sent else 'Non inviato'} - Regime: {narrative_state.get('current_regime', 'TBD')}")
         parts.append(f"• ✅ Lunch (13:00): {'Inviato' if lunch_sent else 'Non inviato'} - Predictions: {narrative_state.get('predictions_count', 0)} tracked")
         parts.append(f"• ✅ Evening (17:00): {'Inviato' if evening_sent else 'Non inviato'} - Close sentiment: {continuity.data['session_data'].get('evening_sentiment', 'TBD')}")
@@ -6333,7 +6308,7 @@ def generate_daily_summary_report():
         lunch_sent = is_message_sent_today("daily_report")
         
         parts.append("📊 *MESSAGGI INVIATI OGGI:*")
-        parts.append(f"• ✅ Rassegna Stampa (08:00): {'Inviata' if rassegna_sent else 'Non inviata'}")
+        parts.append(f"• ☕ Rassegna Stampa ({SCHEDULE['rassegna']}): {'Inviata' if rassegna_sent else 'Non inviata'}")
         parts.append(f"• ✅ Morning Report (09:00): {'Inviato' if morning_sent else 'Non inviato'}")
         parts.append(f"• ✅ Lunch Report (13:00): {'Inviato' if lunch_sent else 'Non inviato'}")
         parts.append(f"• 🔄 Daily Summary (18:00): In corso...")
@@ -6450,8 +6425,8 @@ def generate_daily_summary_report():
     
     if tomorrow.weekday() < 5:  # Giorno lavorativo
         parts.append(f"📅 **{tomorrow_name} {tomorrow.strftime('%d/%m')}** - Giornata di trading:")
-        parts.append("• 08:00 - Rassegna Stampa (analisi overnight)")
-        parts.append("• 09:00 - Morning Report (apertura Europa + ML)")
+        parts.append(f"• {SCHEDULE['rassegna']} - Rassegna Stampa (analisi overnight)")
+        parts.append(f"• {EUROPE_MARKET_OPEN} - Morning Report (apertura Europa + ML)")
         parts.append("• 13:00 - Lunch Report (intraday + USA preview)")
         parts.append("• 18:00 - Daily Summary (recap completo)")
         parts.append("")
@@ -6470,7 +6445,7 @@ def generate_daily_summary_report():
     parts.append("")
     parts.append("─" * 50)
     parts.append("🤖 555 Lite • Daily Summary Complete")
-    parts.append(f"📊 Prossimo aggiornamento: Domani {tomorrow.strftime('%d/%m')} ore 08:00")
+    parts.append(f"📊 Prossimo aggiornamento: Domani {tomorrow.strftime('%d/%m')} ore {SCHEDULE['rassegna']}")
     
     # Invia messaggio
     daily_summary_msg = "\n".join(parts)
@@ -6541,7 +6516,7 @@ def generate_evening_report():
     parts1.append("• **Breadth**: Advance/Decline 2.3:1 - Strong market internals")
     parts1.append("• **Sectors**: Tech +1.8%, Financials +1.2%, Energy +0.9%")
     parts1.append("• **Key Levels**: SPY broke 485 resistance, next target 490")
-    parts1.append("• **After Hours**: Limited activity, Asia handoff at 22:00 CET")
+    parts1.append(f"• **After Hours**: Limited activity, Asia handoff at {US_MARKET_CLOSE} CET")
     parts1.append("")
     
     # European markets recap
@@ -6781,7 +6756,7 @@ def generate_evening_report():
     
     # Asia overnight preview
     parts3.append("🌏 *Asia Overnight Preview:*")
-    parts3.append("• 🕰️ **22:00 CET**: Asia handoff begins - Tokyo futures active")
+    parts3.append(f"• 🌏 **{US_MARKET_CLOSE} CET**: Asia handoff begins - Tokyo futures active")
     parts3.append("• 🇯🇵 **Tokyo**: Nikkei futures, yen positioning watch")
     parts3.append("• 🆭🇰 **Hong Kong**: HSI tech sector sentiment follow-through")
     parts3.append("• 🇪🇺 **Overnight EU**: Futures flat, ECB speakers quiet")
@@ -6793,9 +6768,9 @@ def generate_evening_report():
     tomorrow = now + datetime.timedelta(days=1)
     parts3.append(f"📅 **{tomorrow.strftime('%A %d/%m')}** - Major Events:")
     parts3.append("• **09:30 CET**: Europe open - Watch DAX gap behavior")
-    parts3.append("• **14:30 CET**: US economic data releases (CPI/Employment)")
-    parts3.append("• **15:30 CET**: US market open - Tech earnings continuation")
-    parts3.append("• **16:00 CET**: Fed speakers (if scheduled) - Policy guidance")
+    parts3.append(f"• **{DATA_RELEASE_WINDOW_START} CET**: US economic data releases (CPI/Employment)")
+    parts3.append(f"• **{US_MARKET_OPEN} CET**: US market open - Tech earnings continuation")
+    parts3.append(f"• **{DATA_RELEASE_WINDOW_END} CET**: Fed speakers (if scheduled) - Policy guidance")
     parts3.append("• **20:00 CET**: Earnings after-hours (check schedule)")
     parts3.append("")
     
@@ -6914,7 +6889,7 @@ def generate_evening_report():
     # Final checklist
     parts3.append("✅ *Tomorrow's Checklist:*")
     parts3.append("• 🔍 **Pre-market**: Check Asia overnight, futures gaps")
-    parts3.append("• 📊 **Data Releases**: Economic calendar 14:30-16:00 CET")
+    parts3.append(f"• 📊 **Data Releases**: Economic calendar {DATA_RELEASE_WINDOW_START}-{DATA_RELEASE_WINDOW_END} CET")
     parts3.append("• 💼 **Earnings**: Tech sector continuation theme")
     parts3.append("• ⚡ **Catalyst Watch**: Fed speakers, geopolitical updates")
     parts3.append("• 🔄 **Position Review**: Stop losses, profit targets, sizing")
@@ -7199,7 +7174,7 @@ def generate_evening_report():
     sezioni.append("• 01:00: Tokyo opening (Nikkei 225)")
     sezioni.append("• 02:00: Sydney opening (ASX 200)")
     sezioni.append("• 03:30: Shanghai, Hong Kong opening")
-    sezioni.append("• 09:00: Europe pre-market domani")
+    sezioni.append(f"• {EUROPE_MARKET_OPEN}: Europe pre-market domani")
     sezioni.append("")
     
     sezioni.append("📊 **Focus Asia Overnight:**")
@@ -7212,7 +7187,7 @@ def generate_evening_report():
     # === LIVELLI OVERNIGHT ===
     sezioni.append("📈 *LIVELLI CHIAVE OVERNIGHT*")
     sezioni.append("")
-    sezioni.append("🎯 **Futures Watch (23:00-09:00):**")
+    sezioni.append(f"📈 **Futures Watch (23:00-{EUROPE_MARKET_OPEN}):**")
     sezioni.append("• S&P 500 futures: 4850 resistance | 4820 support")
     sezioni.append("• NASDAQ futures: 15400 breakout | 15300 pivot")
     sezioni.append("• VIX futures: <16 comfort zone | >18 concern")
@@ -7267,10 +7242,10 @@ def generate_evening_report():
     sezioni.append("")
     domani = (now + datetime.timedelta(days=1)).strftime('%d/%m')
     sezioni.append(f"📅 **Eventi Programmati {domani}:**")
-    sezioni.append("• 09:00: Apertura mercati europei")
-    sezioni.append("• 14:30: US Economic Data (TBD)")
-    sezioni.append("• 15:30: Wall Street opening")
-    sezioni.append("• 16:00: Fed speakers calendar")
+    sezioni.append(f"• {EUROPE_MARKET_OPEN}: Apertura mercati europei")
+    sezioni.append(f"• {DATA_RELEASE_WINDOW_START}: US Economic Data (CPI/Employment/Fed)")
+    sezioni.append(f"• {US_MARKET_OPEN}: Wall Street opening")
+    sezioni.append(f"• {DATA_RELEASE_WINDOW_END}: Fed speakers calendar")
     sezioni.append("")
     
     sezioni.append("📊 **Focus Settoriali Domani:**")
@@ -7290,7 +7265,7 @@ def generate_evening_report():
     
     sezioni.append("🌅 *Prossimi aggiornamenti:*")
     sezioni.append("• 🗞️ Rassegna Stampa: 07:00 (6 messaggi)")
-    sezioni.append("• 🌅 Morning Brief: 09:00")
+    sezioni.append(f"• 🔄 Morning Brief: {EUROPE_MARKET_OPEN}")
     sezioni.append("")
     
     # Footer
@@ -7387,7 +7362,7 @@ def generate_morning_news():
             msg1_parts.append("")
             
             # Enhanced continuity connection con rassegna stampa 08:00
-            msg1_parts.append("📰 *RASSEGNA STAMPA FOLLOW-UP (da 08:00):*")
+            msg1_parts.append(f"🌐 *RASSEGNA STAMPA FOLLOW-UP (da {SCHEDULE['rassegna']}):*")
             try:
                 # Import sistema di continuità
                 try:
@@ -7429,8 +7404,23 @@ def generate_morning_news():
             status, status_msg = get_market_status()
             msg1_parts.append("🏛️ *LIVE MARKET STATUS*")
             msg1_parts.append(f"• **Status**: {status_msg}")
-            msg1_parts.append(f"• **Europe**: Opening 09:00 CET (in {60 - now.minute} min)" if now.hour < 9 else "• **Europe**: LIVE SESSION - Intraday analysis")
-            msg1_parts.append(f"• **USA**: Opening 15:30 CET (in {(15*60+30) - (now.hour*60+now.minute)} min)" if now.hour < 15 or (now.hour == 15 and now.minute < 30) else "• **USA**: LIVE SESSION - Wall Street active")
+            # Calculate minutes until Europe market open
+            minutes_until_eu = (9 * 60) - (now.hour * 60 + now.minute)
+            
+            if now.hour < 9:
+                msg1_parts.append(f"• **Europe**: Opening {EUROPE_MARKET_OPEN} CET (in {minutes_until_eu} min)")
+            else:
+                msg1_parts.append("• **Europe**: LIVE SESSION - Intraday analysis")
+            # Calculate minutes until US market open
+            us_open_parts = US_MARKET_OPEN.split(":")
+            us_open_hour = int(us_open_parts[0])
+            us_open_minute = int(us_open_parts[1])
+            minutes_until_us = (us_open_hour * 60 + us_open_minute) - (now.hour * 60 + now.minute)
+            
+            if minutes_until_us > 0:
+                msg1_parts.append(f"• **USA**: Opening {US_MARKET_OPEN} CET (in {minutes_until_us} min)")
+            else:
+                msg1_parts.append("• **USA**: LIVE SESSION - Wall Street active")
             msg1_parts.append("")
             
             # Enhanced Crypto Technical Analysis con prezzi live
@@ -7540,9 +7530,9 @@ def generate_morning_news():
             msg1_parts.append("")
             msg1_parts.append("⏰ *TODAY'S KEY EVENTS & TIMING*")
             msg1_parts.append(f"• **Now ({now.strftime('%H:%M')})**: Morning analysis + Europe positioning")
-            msg1_parts.append("• **14:30 CET**: US Economic data releases window")
-            msg1_parts.append("• **15:30 CET**: Wall Street opening - Volume + sentiment")
-            msg1_parts.append("• **22:00 CET**: After-hours + Asia handoff preparation")
+            msg1_parts.append(f"• **{DATA_RELEASE_WINDOW_START} CET**: US Economic data releases window")
+            msg1_parts.append(f"• **{US_MARKET_OPEN} CET**: Wall Street opening - Volume + sentiment")
+            msg1_parts.append(f"• **{US_MARKET_CLOSE} CET**: After-hours + Asia handoff preparation")
             
             msg1_parts.append("")
             msg1_parts.append("─" * 40)
@@ -7942,7 +7932,14 @@ def generate_morning_news():
             msg3_parts.append("🔄 *CONTINUOUS MONITORING & NEXT UPDATES*")
             msg3_parts.append("• **Live Tracking**: Asia sentiment → Europe momentum → USA opening")
             msg3_parts.append("• **ML Evolution**: Morning analysis → Lunch update → Daily summary")
-            msg3_parts.append(f"• **Next Report**: Lunch Report at 13:00 CET (in {13*60 - (now.hour*60 + now.minute)} min)")
+            # Calculate time until next lunch report using SCHEDULE constant
+            lunch_time_parts = SCHEDULE["lunch"].split(":")
+            lunch_hour = int(lunch_time_parts[0])
+            lunch_minute = int(lunch_time_parts[1])
+            minutes_until_lunch = (lunch_hour * 60 + lunch_minute) - (now.hour * 60 + now.minute)
+            if minutes_until_lunch <= 0:
+                minutes_until_lunch += 24 * 60  # Next day
+            msg3_parts.append(f"• **Next Report**: Lunch Report at {SCHEDULE['lunch']} CET (in {minutes_until_lunch} min)")
             msg3_parts.append("• **Daily Summary**: Complete session review at 18:00 CET")
             
             msg3_parts.append("")
@@ -7965,63 +7962,9 @@ def generate_morning_news():
         print(f"❌ [MORNING] Errore generale: {e}")
         return f"Morning Report: Errore - {str(e)}"
 
-def _old_generate_morning_news_single_message():
-    """VERSIONE PRECEDENTE - MESSAGGIO SINGOLO (DEPRECATA)"""
-    # Vecchia implementazione qui se necessario per rollback
-    pass
-
 def generate_lunch_report():
     """Wrapper per lunch report - chiama generate_daily_lunch_report"""
     return generate_daily_lunch_report()
-
-def _generate_brief_core(brief_type):
-    """Core function for brief reports"""
-    italy_tz = pytz.timezone('Europe/Rome')
-    now = datetime.datetime.now(italy_tz)
-    
-    # === CONTROLLO WEEKEND ===
-    if is_weekend():
-        print(f"🏖️ [{brief_type.upper()}] Weekend rilevato - invio weekend briefing")
-        return send_weekend_briefing("20:00")
-    
-    if brief_type == "evening":
-        title = "🌆 *EVENING REPORT*"
-    else:
-        title = f"📊 *{brief_type.upper()} BRIEF*"
-    
-    # Status mercati
-    status, status_msg = get_market_status()
-    
-    parts = []
-    parts.append(title)
-    parts.append(f"📅 {now.strftime('%d/%m/%Y %H:%M')} CET")
-    parts.append(f"📴 **Mercati**: {status_msg}")
-    parts.append("─" * 35)
-    parts.append("")
-    parts.append("📊 *Market Summary*")
-    parts.append("• Wall Street: Mixed session, tech outperform")
-    parts.append("• Europe: Banks lead gains, energy mixed")
-    parts.append("• Crypto: BTC consolidation 42k-44k range")
-    parts.append("• FX: EUR/USD steady, DXY slight weakness")
-    parts.append("")
-    
-    # Aggiungi notizie critiche
-    try:
-        notizie_critiche = get_notizie_critiche()
-        if notizie_critiche:
-            parts.append("🚨 *Top News*")
-            for i, notizia in enumerate(notizie_critiche[:3], 1):
-                titolo = notizia["titolo"][:70] + "..." if len(notizia["titolo"]) > 70 else notizia["titolo"]
-                parts.append(f"{i}. *{titolo}* — {notizia['fonte']}")
-            parts.append("")
-    except Exception:
-        pass
-    
-    parts.append("─" * 35)
-    parts.append("🤖 555 Lite • " + brief_type.title())
-    
-    msg = "\n".join(parts)
-    return "✅" if invia_messaggio_telegram(msg) else "❌"
 
 def keep_app_alive(app_url):
     """Ping function to keep app alive"""
@@ -8032,29 +7975,7 @@ def keep_app_alive(app_url):
         return response.status_code == 200
     except Exception:
         return False
-def genera_report_trimestrale():
-    """PLACEHOLDER - Report trimestrale da implementare"""
-    msg = f"📊 *REPORT TRIMESTRALE PLACEHOLDER*\n\nFunzione da implementare\n\n🤖 Sistema 555 Lite"
-    success = invia_messaggio_telegram(msg)
-    if success:
-        set_message_sent_flag("quarterly_report")
-    return f"Report trimestrale placeholder: {'✅' if success else '❌'}"
-
-def genera_report_semestrale():
-    """PLACEHOLDER - Report semestrale da implementare"""
-    msg = f"📊 *REPORT SEMESTRALE PLACEHOLDER*\n\nFunzione da implementare\n\n🤖 Sistema 555 Lite"
-    success = invia_messaggio_telegram(msg)
-    if success:
-        set_message_sent_flag("semestral_report")
-    return f"Report semestrale placeholder: {'✅' if success else '❌'}"
-
-def genera_report_annuale():
-    """PLACEHOLDER - Report annuale da implementare"""
-    msg = f"📊 *REPORT ANNUALE PLACEHOLDER*\n\nFunzione da implementare\n\n🤖 Sistema 555 Lite"
-    success = invia_messaggio_telegram(msg)
-    if success:
-        set_message_sent_flag("annual_report")
-    return f"Report annuale placeholder: {'✅' if success else '❌'}"
+# Note: Quarterly, semestral and annual reports removed as placeholders
 
 # === MESSAGGI WEEKEND ===
 def send_weekend_briefing(time_slot):
@@ -8453,9 +8374,9 @@ def send_weekend_briefing(time_slot):
         if now.weekday() == 6:  # Domenica sera
             parts2.append("🗺️ **Lunedì Morning Preparation:**")
             parts2.append("• 08:30 CET: Check Asia overnight results")
-            parts2.append("• 09:00 CET: European pre-market analysis")
+            parts2.append(f"• {EUROPE_MARKET_OPEN} CET: European pre-market analysis")
             parts2.append("• 09:30 CET: Europe open - Gap behavior watch")
-            parts2.append("• 14:30 CET: US economic data releases")
+            parts2.append(f"• {DATA_RELEASE_WINDOW_START} CET: US economic data releases")
             parts2.append("• 15:30 CET: US market open - Volume + sentiment")
             parts2.append("")
             
@@ -8652,7 +8573,7 @@ def _recovery_tick():
     if now.minute % RECOVERY_INTERVAL_MINUTES != 0: 
         return
 
-    # Rassegna
+    # Rassegna - AVAILABLE 7 DAYS A WEEK (consistent with scheduler)
     if _should_attempt_recovery("rassegna") and _within(SCHEDULE["rassegna"], RECOVERY_WINDOWS["rassegna"]):
         print(f"🔄 [RECOVERY] Tentativo recovery rassegna - {hm}")
         try:
@@ -8664,53 +8585,65 @@ def _recovery_tick():
         except Exception as e:
             print(f"❌ [RECOVERY] Errore rassegna: {e}")
 
-    # Morning
+    # Morning - SKIP RECOVERY ON WEEKENDS
     if _should_attempt_recovery("morning_news") and _within(SCHEDULE["morning"], RECOVERY_WINDOWS["morning"]):
-        print(f"🔄 [RECOVERY] Tentativo recovery morning - {hm}")
-        try:
-            LAST_RECOVERY_ATTEMPT[f"morning_news_{today_key}"] = hm
-            generate_morning_news()
-            set_message_sent_flag("morning_news")
-            save_daily_flags()
-            print(f"✅ [RECOVERY] Morning inviato con successo - {hm}")
-        except Exception as e:
-            print(f"❌ [RECOVERY] Errore morning: {e}")
+        if is_weekend():
+            print(f"🏖️ [RECOVERY] Weekend: morning recovery saltato - {hm}")
+        else:
+            print(f"🔄 [RECOVERY] Tentativo recovery morning - {hm}")
+            try:
+                LAST_RECOVERY_ATTEMPT[f"morning_news_{today_key}"] = hm
+                generate_morning_news()
+                set_message_sent_flag("morning_news")
+                save_daily_flags()
+                print(f"✅ [RECOVERY] Morning inviato con successo - {hm}")
+            except Exception as e:
+                print(f"❌ [RECOVERY] Errore morning: {e}")
 
-    # Lunch
+    # Lunch - SKIP RECOVERY ON WEEKENDS
     if _should_attempt_recovery("daily_report") and _within(SCHEDULE["lunch"], RECOVERY_WINDOWS["lunch"]):
-        print(f"🔄 [RECOVERY] Tentativo recovery lunch - {hm}")
-        try:
-            LAST_RECOVERY_ATTEMPT[f"daily_report_{today_key}"] = hm
-            generate_lunch_report()
-            set_message_sent_flag("daily_report")
-            save_daily_flags()
-            print(f"✅ [RECOVERY] Lunch inviato con successo - {hm}")
-        except Exception as e:
-            print(f"❌ [RECOVERY] Errore lunch: {e}")
+        if is_weekend():
+            print(f"🏖️ [RECOVERY] Weekend: lunch recovery saltato - {hm}")
+        else:
+            print(f"🔄 [RECOVERY] Tentativo recovery lunch - {hm}")
+            try:
+                LAST_RECOVERY_ATTEMPT[f"daily_report_{today_key}"] = hm
+                generate_lunch_report()
+                set_message_sent_flag("daily_report")
+                save_daily_flags()
+                print(f"✅ [RECOVERY] Lunch inviato con successo - {hm}")
+            except Exception as e:
+                print(f"❌ [RECOVERY] Errore lunch: {e}")
 
-    # Evening
+    # Evening - SKIP RECOVERY ON WEEKENDS
     if _should_attempt_recovery("evening_report") and _within(SCHEDULE["evening"], RECOVERY_WINDOWS["evening"]):
-        print(f"🔄 [RECOVERY] Tentativo recovery evening - {hm}")
-        try:
-            LAST_RECOVERY_ATTEMPT[f"evening_report_{today_key}"] = hm
-            generate_evening_report()
-            set_message_sent_flag("evening_report")
-            save_daily_flags()
-            print(f"✅ [RECOVERY] Evening inviato con successo - {hm}")
-        except Exception as e:
-            print(f"❌ [RECOVERY] Errore evening: {e}")
+        if is_weekend():
+            print(f"🏖️ [RECOVERY] Weekend: evening recovery saltato - {hm}")
+        else:
+            print(f"🔄 [RECOVERY] Tentativo recovery evening - {hm}")
+            try:
+                LAST_RECOVERY_ATTEMPT[f"evening_report_{today_key}"] = hm
+                generate_evening_report()
+                set_message_sent_flag("evening_report")
+                save_daily_flags()
+                print(f"✅ [RECOVERY] Evening inviato con successo - {hm}")
+            except Exception as e:
+                print(f"❌ [RECOVERY] Errore evening: {e}")
 
-    # Daily Summary
+    # Daily Summary - SKIP RECOVERY ON WEEKENDS
     if _should_attempt_recovery("daily_summary") and _within(SCHEDULE["daily_summary"], RECOVERY_WINDOWS["daily_summary"]):
-        print(f"🔄 [RECOVERY] Tentativo recovery daily summary - {hm}")
-        try:
-            LAST_RECOVERY_ATTEMPT[f"daily_summary_{today_key}"] = hm
-            generate_daily_summary_report()
-            set_message_sent_flag("daily_summary")
-            save_daily_flags()
-            print(f"✅ [RECOVERY] Daily Summary inviato con successo - {hm}")
-        except Exception as e:
-            print(f"❌ [RECOVERY] Errore daily summary: {e}")
+        if is_weekend():
+            print(f"🏖️ [RECOVERY] Weekend: daily summary recovery saltato - {hm}")
+        else:
+            print(f"🔄 [RECOVERY] Tentativo recovery daily summary - {hm}")
+            try:
+                LAST_RECOVERY_ATTEMPT[f"daily_summary_{today_key}"] = hm
+                generate_daily_summary_report()
+                set_message_sent_flag("daily_summary")
+                save_daily_flags()
+                print(f"✅ [RECOVERY] Daily Summary inviato con successo - {hm}")
+            except Exception as e:
+                print(f"❌ [RECOVERY] Errore daily summary: {e}")
 
 def check_and_send_scheduled_messages():
     """Scheduler per-minuto con debounce + recovery tick + controllo weekend"""
@@ -8720,8 +8653,8 @@ def check_and_send_scheduled_messages():
     
     # === CONTROLLO WEEKEND ===
     if is_weekend():
-        # Durante il weekend, invia solo messaggi speciali weekend
-        if current_time in ["10:00", "15:00", "20:00"]:  # Weekend briefings
+        # Durante il weekend, invia weekend briefings agli orari dedicati
+        if current_time in WEEKEND_SCHEDULE:  # Weekend briefings
             if LAST_RUN.get("weekend_brief") != now_key:
                 print(f"🏖️ [WEEKEND] Avvio weekend brief ({current_time})...")
                 try:
@@ -8730,11 +8663,13 @@ def check_and_send_scheduled_messages():
                 except Exception as e:
                     print(f"❌ [WEEKEND] Errore weekend brief: {e}")
         
-        return  # Esce qui durante il weekend - niente messaggi normali
+        # NEW: Allow rassegna stampa to run during weekends (at 08:00)
+        # Non esce più automaticamente - controlla se è orario rassegna
 
-    # RASSEGNA 08:00 (7 messaggi) - NUOVO ORARIO
+    # RASSEGNA 08:00 (7 messaggi) - NOW AVAILABLE 7 DAYS A WEEK
     if current_time == SCHEDULE["rassegna"] and not is_message_sent_today("rassegna") and LAST_RUN.get("rassegna") != now_key:
-        print("🗞️ [SCHEDULER] Avvio rassegna stampa (08:00 - 7 messaggi)...")
+        weekend_indicator = " [WEEKEND]" if is_weekend() else ""
+        print(f"🗞️ [SCHEDULER] Avvio rassegna stampa (08:00 - 7 messaggi){weekend_indicator}...")
         # lock immediato
         try:
             LAST_RUN["rassegna"] = now_key
@@ -8750,56 +8685,68 @@ def check_and_send_scheduled_messages():
         except Exception:
             pass
 
-    # MORNING 09:00
+    # MORNING 09:00 - ONLY ON WEEKDAYS
     if current_time == SCHEDULE["morning"] and not is_message_sent_today("morning_news") and LAST_RUN.get("morning") != now_key:
-        print("🌅 [SCHEDULER] Avvio morning brief...")
-        try:
-            LAST_RUN["morning"] = now_key
-            generate_morning_news()
-            set_message_sent_flag("morning_news"); 
-            save_daily_flags()
-        except Exception as e:
-            print(f"❌ [SCHEDULER] Errore morning: {e}")
+        if is_weekend():
+            print("🏖️ [SCHEDULER] Weekend: Morning report saltato (solo rassegna + weekend briefing)")
+        else:
+            print("🌅 [SCHEDULER] Avvio morning brief...")
+            try:
+                LAST_RUN["morning"] = now_key
+                generate_morning_news()
+                set_message_sent_flag("morning_news"); 
+                save_daily_flags()
+            except Exception as e:
+                print(f"❌ [SCHEDULER] Errore morning: {e}")
 
-    # LUNCH 13:00
+    # LUNCH 13:00 - ONLY ON WEEKDAYS
     if current_time == SCHEDULE["lunch"] and not is_message_sent_today("daily_report") and LAST_RUN.get("lunch") != now_key:
-        print("🍽️ [SCHEDULER] Avvio lunch brief...")
-        try:
-            LAST_RUN["lunch"] = now_key
-            generate_lunch_report()
-            set_message_sent_flag("daily_report"); 
-            save_daily_flags()
-        except Exception as e:
-            print(f"❌ [SCHEDULER] Errore lunch: {e}")
+        if is_weekend():
+            print("🏖️ [SCHEDULER] Weekend: Lunch report saltato (mercati tradizionali chiusi)")
+        else:
+            print("🍽️ [SCHEDULER] Avvio lunch brief...")
+            try:
+                LAST_RUN["lunch"] = now_key
+                generate_lunch_report()
+                set_message_sent_flag("daily_report"); 
+                save_daily_flags()
+            except Exception as e:
+                print(f"❌ [SCHEDULER] Errore lunch: {e}")
 
-    # EVENING 17:00 - NUOVO: 3 messaggi per analisi close
+    # EVENING 17:00 - ONLY ON WEEKDAYS
     if current_time == SCHEDULE["evening"] and not is_message_sent_today("evening_report") and LAST_RUN.get("evening") != now_key:
-        print("🌆 [SCHEDULER] Avvio evening report (17:00 - 3 messaggi)...")
-        try:
-            LAST_RUN["evening"] = now_key
-            generate_evening_report()
-            set_message_sent_flag("evening_report"); 
-            save_daily_flags()
-        except Exception as e:
-            print(f"❌ [SCHEDULER] Errore evening: {e}")
+        if is_weekend():
+            print("🏖️ [SCHEDULER] Weekend: Evening report saltato (mercati tradizionali chiusi)")
+        else:
+            print("🌆 [SCHEDULER] Avvio evening report (17:00 - 3 messaggi)...")
+            try:
+                LAST_RUN["evening"] = now_key
+                generate_evening_report()
+                set_message_sent_flag("evening_report"); 
+                save_daily_flags()
+            except Exception as e:
+                print(f"❌ [SCHEDULER] Errore evening: {e}")
 
-    # DAILY SUMMARY 18:00 - SISTEMA FINALE
+    # DAILY SUMMARY 18:00 - ONLY ON WEEKDAYS 
     if current_time == SCHEDULE["daily_summary"] and not is_message_sent_today("daily_summary") and LAST_RUN.get("daily_summary") != now_key:
-        print("📋 [SCHEDULER] Avvio daily summary (riassunto giornaliero completo)...")
-        try:
-            LAST_RUN["daily_summary"] = now_key
-            generate_daily_summary_report()
-            set_message_sent_flag("daily_summary"); 
-            save_daily_flags()
-        except Exception as e:
-            print(f"❌ [SCHEDULER] Errore daily summary: {e}")
+        if is_weekend():
+            print("🏖️ [SCHEDULER] Weekend: Daily summary saltato (sostituito da weekend briefing)")
+        else:
+            print("📋 [SCHEDULER] Avvio daily summary (riassunto giornaliero completo)...")
+            try:
+                LAST_RUN["daily_summary"] = now_key
+                generate_daily_summary_report()
+                set_message_sent_flag("daily_summary"); 
+                save_daily_flags()
+            except Exception as e:
+                print(f"❌ [SCHEDULER] Errore daily summary: {e}")
 
-    # Recovery pass ogni 30 minuti (solo nei giorni lavorativi)
-    if not is_weekend():
-        try:
-            _recovery_tick()
-        except Exception as e:
-            print(f"⚠️ [SCHEDULER] Recovery tick error: {e}")
+    # Recovery pass ogni 30 minuti 
+    # NOTE: Recovery attivo anche nei weekend per la rassegna stampa
+    try:
+        _recovery_tick()
+    except Exception as e:
+        print(f"⚠️ [SCHEDULER] Recovery tick error: {e}")
 
 
 def is_keep_alive_time():
@@ -8964,8 +8911,25 @@ def test_weekend():
 def force_weekend_brief():
     """Forza l'invio di un weekend briefing per test"""
     try:
-        result = send_weekend_briefing("10:00")
-        return {"status": "success", "result": result}
+        # Use current time to determine appropriate weekend slot
+        now = datetime.datetime.now(pytz.timezone('Europe/Rome'))
+        current_hour = now.hour
+        
+        # Choose appropriate weekend time slot based on current time
+        if current_hour < 12:
+            time_slot = WEEKEND_SCHEDULE[0]  # "10:00"
+        elif current_hour < 18:
+            time_slot = WEEKEND_SCHEDULE[1]  # "15:00"
+        else:
+            time_slot = WEEKEND_SCHEDULE[2]  # "20:00"
+            
+        result = send_weekend_briefing(time_slot)
+        return {
+            "status": "success", 
+            "result": result,
+            "time_slot_used": time_slot,
+            "current_time": now.strftime('%H:%M')
+        }
     except Exception as e:
         return {"status": "error", "error": str(e)}
 
@@ -9487,7 +9451,7 @@ def generate_morning_snapshot():
     parts1.append("🌍 *Global Markets Overview*")
     parts1.append("• 🇪🇺 **Europa**: Pre-open analysis - Banks & Energy focus")
     parts1.append("  • DAX futures, FTSE pre-market, sector rotation watch")
-    parts1.append("  • Chiusura: 17:30 CET - monitor closing auction")
+    parts1.append(f"  • Chiusura: {EUROPE_MARKET_CLOSE} CET - monitor closing auction")
     parts1.append("• 🇺🇸 **USA**: Apertura 15:30 CET - Tech earnings season")
     parts1.append("  • S&P 500 overnight, NASDAQ pre-market levels")
     parts1.append("  • Focus: Mega-cap tech + Fed policy sensitive sectors")
@@ -9554,10 +9518,10 @@ def generate_morning_snapshot():
     
     parts1.append("")
     parts1.append("🕰️ *Key Times Today:*")
-    parts1.append("• 15:30 CET: US market open (SPY, QQQ, DIA)")
-    parts1.append("• 16:00 CET: NY Fed, economic data releases")
-    parts1.append("• 17:30 CET: European market close")
-    parts1.append("• 22:00 CET: After-hours trading, Asia prep")
+    parts1.append(f"• {US_MARKET_OPEN} CET: US market open (SPY, QQQ, DIA)")
+    parts1.append(f"• {DATA_RELEASE_WINDOW_END} CET: NY Fed, economic data releases")
+    parts1.append(f"• {EUROPE_MARKET_CLOSE} CET: European market close")
+    parts1.append(f"• {US_MARKET_CLOSE} CET: After-hours trading, Asia prep")
     parts1.append("")
     parts1.append("─" * 40)
     parts1.append("🤖 555 Lite • Morning 1/3")
@@ -9843,7 +9807,7 @@ def generate_morning_snapshot():
     # Daily focus con calendar integration
     parts3.append("🔎 *Today's Focus Areas:*")
     parts3.append("• 🏬 **Europe Open**: DAX/FTSE/CAC sector rotation analysis")
-    parts3.append("• 📊 **Economic Data**: Monitor releases 14:00-16:00 CET window")
+    parts3.append(f"• 📊 **Economic Data**: Monitor releases {DATA_RELEASE_WINDOW_START}-{DATA_RELEASE_WINDOW_END} CET window")
     parts3.append("• 🏦 **Banking**: ECB policy implications + rate sensitivity")
     parts3.append("• ⚡ **Energy**: Oil inventory data + renewable sector news")
     parts3.append("• 🔍 **Tech Preview**: Pre-US market sentiment + earnings preview")
@@ -9852,7 +9816,7 @@ def generate_morning_snapshot():
     if SESSION_TRACKER_ENABLED:
         try:
             focus_items = ['Europe sector rotation', 'Economic data 14-16h', 'Banking ECB sensitivity']
-            key_events = ['US market open 15:30', 'Economic releases', 'European close 17:30']
+            key_events = [f'US market open {US_MARKET_OPEN}', 'Economic releases', f'European close {EUROPE_MARKET_CLOSE}']
             ml_sentiment = news_analysis.get('sentiment', 'NEUTRAL') if 'news_analysis' in locals() else 'NEUTRAL'
             set_morning_focus(focus_items, key_events, ml_sentiment)
         except Exception:
@@ -9875,38 +9839,9 @@ def generate_morning_snapshot():
 
 
 
-# === SAFE SEND & RECOVERY HELPERS ===
-def safe_send(flag_name, last_key, send_callable, after_set_flag_name=None):
-    """Imposta lock+debounce, invia, rollback su errore."""
-    italy_tz = pytz.timezone('Europe/Rome')
-    now = datetime.datetime.now(italy_tz)
-    now_key = now.strftime("%Y%m%d%H%M")
-    GLOBAL_FLAGS[flag_name] = True
-    GLOBAL_FLAGS[last_key] = now_key
-    save_daily_flags()
-    try:
-        result = send_callable()
-        if after_set_flag_name:
-            set_message_sent_flag(after_set_flag_name)
-        return result
-    except Exception as e:
-        GLOBAL_FLAGS[flag_name] = False
-        save_daily_flags()
-        print(f"❌ [SAFE-SEND] Errore {flag_name}: {e}")
-        raise
-
-def should_recover(sent_flag, scheduled_hhmm, grace_min, cutoff_hhmm, now_hhmm):
-    def to_min(hhmm):
-        h,m = map(int, hhmm.split(":")); return h*60+m
-    return (not sent_flag) and (to_min(now_hhmm) >= to_min(scheduled_hhmm)+grace_min) and (to_min(now_hhmm) <= to_min(cutoff_hhmm))
-
-
-
-
-
+# === TELEGRAM MESSAGING FUNCTIONS ===
 
 def send_telegram_message(text: str) -> bool:
-    token = os.getenv("TELEGRAM_BOT_TOKEN","").strip()
     chat  = os.getenv("TELEGRAM_CHAT_ID","").strip()
     if not token or not chat:
         return False

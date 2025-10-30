@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: sistema-555-serverlite
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python 555-serverlite.py
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.5
+      - key: TZ
+        value: Europe/Rome
+      - key: PORT
+        generateValue: true
+    plan: free
+    healthCheckPath: /health
+    autoDeploy: true
