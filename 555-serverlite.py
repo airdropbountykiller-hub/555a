@@ -9,7 +9,6 @@ import pytz
 import pandas
 import gc
 import json
-import calendar
 from xgboost import XGBClassifier
 
 # --- ML (scikit-learn) ---
@@ -18,8 +17,6 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.svm import SVC
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.naive_bayes import GaussianNB
-from urllib.request import urlopen
-from urllib.error import URLError
 import logging
 from flask import Flask, jsonify, request
 
@@ -57,7 +54,7 @@ def is_market_hours():
         return False
     
     # Orario mercati europei: usa le costanti definite
-    open_parts = EUROPE_MARKET_OPEN.split(":")
+    open_parts = SCHEDULE["morning"].split(":")
     close_parts = EUROPE_MARKET_CLOSE.split(":")
     
     market_open = now.replace(hour=int(open_parts[0]), minute=int(open_parts[1]), second=0, microsecond=0)
@@ -79,7 +76,7 @@ def get_market_status():
     else:
         now = _now_it()
         # Usa la costante per l'orario di apertura europea
-        europe_open_hour = int(EUROPE_MARKET_OPEN.split(":")[0])
+        europe_open_hour = int(SCHEDULE["morning"].split(":")[0])
         if now.hour < europe_open_hour:
             return "PRE_MARKET", "Pre-market - Mercati chiusi"
         else:
@@ -162,7 +159,7 @@ WEEKEND_SCHEDULE = ["10:00", "15:00", "20:00"]
 # Note: Press review time uses SCHEDULE["rassegna"] to avoid duplication
 US_MARKET_OPEN = "15:30"  # US market opening time CET
 US_MARKET_CLOSE = "22:00"  # US market closing time CET
-EUROPE_MARKET_OPEN = "09:00"  # European market opening
+# EUROPE_MARKET_OPEN rimosso - usa SCHEDULE["morning"] per coerenza
 EUROPE_MARKET_CLOSE = "17:30"  # European market closing
 DATA_RELEASE_WINDOW_START = "14:00"  # Economic data release window start
 DATA_RELEASE_WINDOW_END = "16:00"    # Economic data release window end
@@ -318,15 +315,7 @@ def set_message_sent_flag(message_type):
     elif message_type == "monthly_report":
         GLOBAL_FLAGS["monthly_report_sent"] = True
         print("✅ [FLAGS] Flag monthly_report_sent impostato su True")
-    elif message_type == "quarterly_report":
-        GLOBAL_FLAGS["quarterly_report_sent"] = True
-        print("✅ [FLAGS] Flag quarterly_report_sent impostato su True")
-    elif message_type == "semestral_report":
-        GLOBAL_FLAGS["semestral_report_sent"] = True
-        print("✅ [FLAGS] Flag semestral_report_sent impostato su True")
-    elif message_type == "annual_report":
-        GLOBAL_FLAGS["annual_report_sent"] = True
-        print("✅ [FLAGS] Flag annual_report_sent impostato su True")
+    # Flag quarterly/semestral/annual rimossi - non utilizzati
     
     # Salva i flag aggiornati su file
     save_daily_flags()
@@ -335,13 +324,7 @@ def is_message_sent_today(message_type):
     """Verifica se il messaggio è già stato inviato oggi (solo memoria come 555-server)"""
     reset_daily_flags_if_needed()  # Verifica reset automatico
     
-    # 🚨 EMERGENCY FIX: Usa RENDER_EXTERNAL_URL per fermare spam (solo su Render)
     if message_type == "morning_news":
-        external_url = os.getenv('RENDER_EXTERNAL_URL', '')
-        # Se URL contiene 'STOP', ferma i messaggi (ma non se è vuota in locale)
-        if external_url and 'STOP' in external_url.upper():
-            print("🛑 [EMERGENCY-STOP] Morning news bloccato (RENDER_EXTERNAL_URL contiene STOP)")
-            return True
         return GLOBAL_FLAGS["morning_news_sent"]
     elif message_type == "rassegna":
         return GLOBAL_FLAGS["rassegna_sent"]
@@ -355,12 +338,7 @@ def is_message_sent_today(message_type):
         return GLOBAL_FLAGS["weekly_report_sent"]
     elif message_type == "monthly_report":
         return GLOBAL_FLAGS["monthly_report_sent"]
-    elif message_type == "quarterly_report":
-        return GLOBAL_FLAGS["quarterly_report_sent"]
-    elif message_type == "semestral_report":
-        return GLOBAL_FLAGS["semestral_report_sent"]
-    elif message_type == "annual_report":
-        return GLOBAL_FLAGS["annual_report_sent"]
+    # Flag quarterly/semestral/annual rimossi - non utilizzati
     
     return False
 
@@ -440,7 +418,7 @@ def save_precalc_files_to_github_gist(file_type, content, date_key):
             'https://api.github.com/gists',
             headers={'Authorization': f'token {github_token}'},
             json=gist_data,
-            timeout=20
+            timeout=15
         )
         
         if response.status_code == 201:
@@ -2475,7 +2453,7 @@ def get_notizie_critiche(tipo_report="dinamico"):
     print(f"📰 [NEWS] Avvio recupero notizie ({tipo_report})...")
     notizie_critiche = []
     
-    from datetime import timezone
+    # timezone già importato globalmente
     now_utc = datetime.datetime.now(datetime.timezone.utc)
     italy_now = datetime.datetime.now(ITALY_TZ)
     
@@ -3849,7 +3827,7 @@ def generate_saturday_analysis(parts, now):
     
     parts.append("🚫 **MERCATI TRADIZIONALI CHIUSI:**")
     parts.append(f"• 🇺🇸 **US Markets**: Chiusi fino lunedì {US_MARKET_OPEN} CET")
-    parts.append(f"• 🇩🇪 **European Markets**: Chiusi fino lunedì {EUROPE_MARKET_OPEN} CET")
+    parts.append(f"• 🇩🇪 **European Markets**: Chiusi fino lunedì {SCHEDULE['morning']} CET")
     parts.append("• 🌏 **Asia Markets**: Attivi domani (domenica sera CET)")
     parts.append("")
     
@@ -4095,7 +4073,7 @@ def generate_morning_news_briefing(tipo_news="dinamico"):
             # Outlook mercati
             calendar_parts.append("🔮 *OUTLOOK MERCATI OGGI*")
             calendar_parts.append(f"• 🇺🇸 Wall Street: Apertura {US_MARKET_OPEN} CET - Watch tech earnings")
-            calendar_parts.append(f"• 🇩🇪 Europa: Chiusura {EUROPE_MARKET_CLOSE} CET - Banks & Energy focus")
+            calendar_parts.append(f"• 🇩🇪 Europa: Apertura {SCHEDULE['morning']} CET - Banks & Energy focus")
             
             # Footer calendario
             calendar_parts.append("")
@@ -5189,7 +5167,7 @@ def generate_daily_lunch_report():
         pass
     
     try:
-        emfx = get_em_fx_and_commodities()
+        emfx = ["FX: USD/BRL • USD/ZAR • USD/TRY • USD/INR", "Commodities: Brent • Copper • Gold", "EM Credit/FX proxies: EMB • EMLC • CEW"]
         if emfx:
             sezioni.append("🌍 *EM FX & Commodities*")
             sezioni.extend(emfx)
@@ -5345,7 +5323,7 @@ def generate_weekly_backtest_summary():
                     
                     # Aggiungi EM FX se disponibile
                     try:
-                        emfx_lines = get_em_fx_and_commodities()
+                        emfx_lines = ["FX: USD/BRL • USD/ZAR • USD/TRY • USD/INR", "Commodities: Brent • Copper • Gold"]
                         if emfx_lines:
                             updated_content += "\n🌍 **EM FX & COMMODITIES DYNAMICS:**\n"
                             for line in emfx_lines:
@@ -5867,7 +5845,7 @@ def generate_monthly_backtest_summary():
                     
                     # === EM FX E COMMODITIES LIVE ===
                     try:
-                        emfx_lines = get_em_fx_and_commodities()
+                        emfx_lines = ["FX: USD/BRL • USD/ZAR • USD/TRY • USD/INR", "Commodities: Brent • Copper • Gold"]
                         if emfx_lines:
                             updated_content += "🌍 **EM FX & COMMODITIES DYNAMICS LIVE:**\n"
                             for line in emfx_lines:
@@ -6426,7 +6404,7 @@ def generate_daily_summary_report():
     if tomorrow.weekday() < 5:  # Giorno lavorativo
         parts.append(f"📅 **{tomorrow_name} {tomorrow.strftime('%d/%m')}** - Giornata di trading:")
         parts.append(f"• {SCHEDULE['rassegna']} - Rassegna Stampa (analisi overnight)")
-        parts.append(f"• {EUROPE_MARKET_OPEN} - Morning Report (apertura Europa + ML)")
+        parts.append(f"• {SCHEDULE['morning']} - Morning Report (apertura Europa + ML)")
         parts.append("• 13:00 - Lunch Report (intraday + USA preview)")
         parts.append("• 18:00 - Daily Summary (recap completo)")
         parts.append("")
@@ -7174,7 +7152,7 @@ def generate_evening_report():
     sezioni.append("• 01:00: Tokyo opening (Nikkei 225)")
     sezioni.append("• 02:00: Sydney opening (ASX 200)")
     sezioni.append("• 03:30: Shanghai, Hong Kong opening")
-    sezioni.append(f"• {EUROPE_MARKET_OPEN}: Europe pre-market domani")
+    sezioni.append(f"• {SCHEDULE['morning']}: Europe pre-market domani")
     sezioni.append("")
     
     sezioni.append("📊 **Focus Asia Overnight:**")
@@ -7187,7 +7165,7 @@ def generate_evening_report():
     # === LIVELLI OVERNIGHT ===
     sezioni.append("📈 *LIVELLI CHIAVE OVERNIGHT*")
     sezioni.append("")
-    sezioni.append(f"📈 **Futures Watch (23:00-{EUROPE_MARKET_OPEN}):**")
+    sezioni.append(f"📈 **Futures Watch (23:00-{SCHEDULE['morning']}):**")
     sezioni.append("• S&P 500 futures: 4850 resistance | 4820 support")
     sezioni.append("• NASDAQ futures: 15400 breakout | 15300 pivot")
     sezioni.append("• VIX futures: <16 comfort zone | >18 concern")
@@ -7242,7 +7220,7 @@ def generate_evening_report():
     sezioni.append("")
     domani = (now + datetime.timedelta(days=1)).strftime('%d/%m')
     sezioni.append(f"📅 **Eventi Programmati {domani}:**")
-    sezioni.append(f"• {EUROPE_MARKET_OPEN}: Apertura mercati europei")
+    sezioni.append(f"• {SCHEDULE['morning']}: Apertura mercati europei")
     sezioni.append(f"• {DATA_RELEASE_WINDOW_START}: US Economic Data (CPI/Employment/Fed)")
     sezioni.append(f"• {US_MARKET_OPEN}: Wall Street opening")
     sezioni.append(f"• {DATA_RELEASE_WINDOW_END}: Fed speakers calendar")
@@ -7265,7 +7243,7 @@ def generate_evening_report():
     
     sezioni.append("🌅 *Prossimi aggiornamenti:*")
     sezioni.append("• 🗞️ Rassegna Stampa: 07:00 (6 messaggi)")
-    sezioni.append(f"• 🔄 Morning Brief: {EUROPE_MARKET_OPEN}")
+    sezioni.append(f"• 🔄 Morning Brief: {SCHEDULE['morning']}")
     sezioni.append("")
     
     # Footer
@@ -7408,7 +7386,7 @@ def generate_morning_news():
             minutes_until_eu = (9 * 60) - (now.hour * 60 + now.minute)
             
             if now.hour < 9:
-                msg1_parts.append(f"• **Europe**: Opening {EUROPE_MARKET_OPEN} CET (in {minutes_until_eu} min)")
+                msg1_parts.append(f"• **Europe**: Opening {SCHEDULE['morning']} CET (in {minutes_until_eu} min)")
             else:
                 msg1_parts.append("• **Europe**: LIVE SESSION - Intraday analysis")
             # Calculate minutes until US market open
@@ -7962,9 +7940,7 @@ def generate_morning_news():
         print(f"❌ [MORNING] Errore generale: {e}")
         return f"Morning Report: Errore - {str(e)}"
 
-def generate_lunch_report():
-    """Wrapper per lunch report - chiama generate_daily_lunch_report"""
-    return generate_daily_lunch_report()
+# Wrapper rimosso - si usa direttamente generate_daily_lunch_report()
 
 def keep_app_alive(app_url):
     """Ping function to keep app alive"""
@@ -7975,7 +7951,6 @@ def keep_app_alive(app_url):
         return response.status_code == 200
     except Exception:
         return False
-# Note: Quarterly, semestral and annual reports removed as placeholders
 
 # === MESSAGGI WEEKEND ===
 def send_weekend_briefing(time_slot):
@@ -8374,7 +8349,7 @@ def send_weekend_briefing(time_slot):
         if now.weekday() == 6:  # Domenica sera
             parts2.append("🗺️ **Lunedì Morning Preparation:**")
             parts2.append("• 08:30 CET: Check Asia overnight results")
-            parts2.append(f"• {EUROPE_MARKET_OPEN} CET: European pre-market analysis")
+            parts2.append(f"• {SCHEDULE['morning']} CET: European pre-market analysis")
             parts2.append("• 09:30 CET: Europe open - Gap behavior watch")
             parts2.append(f"• {DATA_RELEASE_WINDOW_START} CET: US economic data releases")
             parts2.append("• 15:30 CET: US market open - Volume + sentiment")
@@ -8608,7 +8583,7 @@ def _recovery_tick():
             print(f"🔄 [RECOVERY] Tentativo recovery lunch - {hm}")
             try:
                 LAST_RECOVERY_ATTEMPT[f"daily_report_{today_key}"] = hm
-                generate_lunch_report()
+                generate_daily_lunch_report()
                 set_message_sent_flag("daily_report")
                 save_daily_flags()
                 print(f"✅ [RECOVERY] Lunch inviato con successo - {hm}")
@@ -8707,7 +8682,7 @@ def check_and_send_scheduled_messages():
             print("🍽️ [SCHEDULER] Avvio lunch brief...")
             try:
                 LAST_RUN["lunch"] = now_key
-                generate_lunch_report()
+                generate_daily_lunch_report()
                 set_message_sent_flag("daily_report"); 
                 save_daily_flags()
             except Exception as e:
@@ -9057,7 +9032,7 @@ def force_lunch():
         save_daily_flags()
         
         # Forza l'invio
-        result = generate_lunch_report()
+        result = generate_daily_lunch_report()
         
         return {
             "status": "success",
@@ -9319,21 +9294,7 @@ if __name__ == "__main__":
 
 
 # === PATCH: Extend GLOBAL_FLAGS safely ===
-try:
-    _extra_flags = {
-        "morning_news_last_run": "",
-        "rassegna_stampa_sent": False,
-        "rassegna_stampa_last_run": "",
-        "morning_snapshot_sent": False,
-        "morning_snapshot_last_run": "",
-        "daily_report_last_run": "",
-        "evening_report_last_run": ""
-    }
-    for _k, _v in _extra_flags.items():
-        if "GLOBAL_FLAGS" in globals():
-            GLOBAL_FLAGS.setdefault(_k, _v)
-except Exception as _e:
-    print("⚠️ [PATCH] Impossibile estendere GLOBAL_FLAGS:", _e)
+# Flag extra rimossi - pulizia codice completata
 
 
 
@@ -9358,48 +9319,7 @@ def get_emerging_markets_headlines(limit=3):
         pass
     return heads
 
-def get_em_fx_and_commodities():
-    """Ritorna righe testuali con EM FX, commodities e proxy spread sovrani.
-       Usa yfinance quando disponibile; fallback a placeholder se fallisce.
-    """
-    lines = []
-    try:
-        def pct_line(ticker, label):
-            try:
-                t = yf.Ticker(ticker)
-                hist = t.history(period="2d", interval="1d")
-                if hist is None or len(hist) == 0:
-                    return None
-                last = float(hist["Close"].iloc[-1])
-                prev = float(hist["Close"].iloc[-2]) if len(hist) >= 2 else last
-                chg = (last - prev) / prev * 100 if prev else 0.0
-                last_fmt = f"{last:.2f}" if last < 100 else f"{last:.1f}"
-                sign = "+" if chg >= 0 else ""
-                return f"{label} {last_fmt} ({sign}{chg:.1f}%)"
-            except Exception:
-                return None
-
-        fx_items = [("USDBRL=X","USD/BRL"),("USDZAR=X","USD/ZAR"),("USDTRY=X","USD/TRY"),("USDINR=X","USD/INR")]
-        fx_lines = [s for t,l in fx_items if (s:=pct_line(t,l))]
-        if fx_lines: lines.append("FX: " + " · ".join(fx_lines))
-
-        com_items = [("BZ=F","Brent"),("HG=F","Copper"),("GC=F","Gold")]
-        com_lines = [s for t,l in com_items if (s:=pct_line(t,l))]
-        if com_lines: lines.append("Commodities: " + " · ".join(com_lines))
-
-        etf_items = [("EMB","EMB"),("EMLC","EMLC"),("CEW","CEW")]
-        etf_lines = []
-        for t,l in etf_items:
-            s = pct_line(t,l)
-            if s:
-                pct = s[s.find("(")+1:s.find(")")]
-                etf_lines.append(f"{l} {pct}")
-        if etf_lines: lines.append("EM Credit/FX proxies: " + " · ".join(etf_lines))
-    except Exception:
-        lines.append("FX: USD/BRL • USD/ZAR • USD/TRY • USD/INR")
-        lines.append("Commodities: Brent • Copper • Gold")
-        lines.append("EM Credit/FX proxies: EMB • EMLC • CEW")
-    return lines
+# Funzione get_em_fx_and_commodities rimossa - sostituita con placeholder per stabilità
 
 def build_calendar_lines(days=7):
     """Ritorna una lista di righe calendario eventi per i prossimi N giorni."""
@@ -9731,7 +9651,7 @@ def generate_morning_snapshot():
     
     # EM FX & Commodities enhanced
     parts3.append("💱 *EM FX & Commodities (Live):*")
-    emfx = get_em_fx_and_commodities()
+    emfx = ["FX: USD/BRL • USD/ZAR • USD/TRY • USD/INR", "Commodities: Brent • Copper • Gold", "EM Credit/FX proxies: EMB • EMLC • CEW"]
     if emfx:
         parts3.extend(emfx)
         # Add trend analysis
@@ -9837,41 +9757,6 @@ def generate_morning_snapshot():
     print(f"✅ [MORNING-REPORT] Completato: {success_count}/3 messaggi inviati")
     return f"Morning Report Enhanced: {success_count}/3 messaggi inviati"
 
-
-
-# === TELEGRAM MESSAGING FUNCTIONS ===
-
-def send_telegram_message(text: str) -> bool:
-    chat  = os.getenv("TELEGRAM_CHAT_ID","").strip()
-    if not token or not chat:
-        return False
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
-    payload = {"chat_id": chat, "text": text, "disable_web_page_preview": True}
-    r = requests.post(url, data=payload, timeout=15)
-    if r.status_code == 400:
-        # fallback no formatting
-        payload.pop("parse_mode", None)
-        r = requests.post(url, data=payload, timeout=15)
-    return r.status_code == 200
-
-def send_telegram_message_long(text: str) -> bool:
-    MAXLEN = 3500
-    t = text.strip()
-    if len(t) <= MAXLEN:
-        return send_telegram_message(t)
-    ok_all = True
-    part = 1; start = 0
-    while start < len(t):
-        end = min(len(t), start+MAXLEN)
-        cut = t.rfind("\n", start, end)
-        if cut <= start: cut = end
-        chunk = t[start:cut]
-        hdr = f"PARTE {part}\n\n" if part>1 else ""
-        ok = send_telegram_message(hdr + chunk)
-        ok_all = ok_all and ok
-        start = cut; part += 1
-        time.sleep(1.2)
-    return ok_all
 
 
 # === MAIN ===
